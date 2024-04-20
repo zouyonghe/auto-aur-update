@@ -16,13 +16,7 @@ jobs:
       fail-fast: false
       matrix:
         PKGBUILDs:
-        - koreader-bin
-#        - icalingua++
-        - listen1
-        - listen1-electron
-#        - clash-for-windows-electron-zh
-        - sabaki-electron
-
+        -clash-verge-rev-bin-concise
 
 
     runs-on: ubuntu-latest
@@ -58,8 +52,8 @@ jobs:
         echo `date +"%Y-%m-%d %H:%M:%S"` begin > time.log     
     - name: Commit #上传新的refresh_token到仓库
       run: |
-        git config --local user.email 1304024859@qq.com
-        git config --local user.name zzy-ac
+        git config --local user.email 1259085392z@gmail.com
+        git config --local user.name buding
         git add .
         git commit -m "update new time.log" -a
     - name: Push changes
