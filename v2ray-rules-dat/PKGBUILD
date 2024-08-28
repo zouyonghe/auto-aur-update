@@ -4,7 +4,7 @@
 
 pkgname=v2ray-rules-dat
 pkgver=202407152211
-pkgrel=2
+pkgrel=1
 pkgdesc="Enhanced edition of V2Ray rules dat files"
 arch=(any)
 url="https://github.com/Loyalsoldier/$pkgname"

@@ -20,7 +20,7 @@ sha512sums_aarch64=('4cf2f783cd03ac33477504b3c3530f7b8331f2eb8520a24639d964980c9
 
 package() {
     tar xpf data.tar.gz -C ${pkgdir}
-    rm ${pkgdir}/usr/bin/verge-mihomo
-    rm ${pkgdir}/usr/bin/verge-mihomo-alpha
+    rm ${pkgdir}/usr/bin/clash-meta
+    rm ${pkgdir}/usr/bin/clash-meta-alpha
     chown -R root:root ${pkgdir}
 }
