@@ -18,7 +18,7 @@ jobs:
       matrix:
         PKGBUILDs:
         - clash-verge-rev-bin-concise
-
+	- v2ray-rules-dat
 
     runs-on: ubuntu-latest
 #    if: github.event.repository.owner.id == github.event.sender.id  # 自己点的 start
