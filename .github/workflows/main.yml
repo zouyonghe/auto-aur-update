@@ -17,6 +17,7 @@ jobs:
       fail-fast: false
       matrix:
         PKGBUILDs:
+        - pixelterm-c
         - clash-verge-rev-bin-concise
         # - v2ray-rules-dat
 
