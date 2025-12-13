@@ -68,7 +68,10 @@ jobs:
         git config --local user.email 1259085392z@gmail.com
         git config --local user.name buding
         git add .
-        git commit -m "update new time.log" -a
+        git commit -m "update new time.log" -a || echo "No changes to commit"
+    - name: Pull before push
+      run: |
+        git pull --rebase origin main || true
     - name: Push changes
       uses: ad-m/github-push-action@master
       with:
