@@ -25,7 +25,7 @@ if [ "$force_update" = "true" ] || [ "$current_ver" != "$latest_ver" ]; then
     url="https://github.com/zouyonghe/PixelTerm-C/releases/download/v${latest_ver}"
     
     echo "Downloading and calculating checksums for x86_64..."
-    if wget -q "${url}/pixelterm-amd64-linux" -O /tmp/pixelterm-amd64-linux; then
+    if curl -sL "${url}/pixelterm-amd64-linux" -o /tmp/pixelterm-amd64-linux; then
         md5_x86_64=$(md5sum /tmp/pixelterm-amd64-linux | cut -d' ' -f1)
         echo "x86_64 checksum: ${md5_x86_64}"
     else
@@ -34,7 +34,7 @@ if [ "$force_update" = "true" ] || [ "$current_ver" != "$latest_ver" ]; then
     fi
     
     echo "Downloading and calculating checksums for aarch64..."
-    if wget -q "${url}/pixelterm-arm64-linux" -O /tmp/pixelterm-arm64-linux; then
+    if curl -sL "${url}/pixelterm-arm64-linux" -o /tmp/pixelterm-arm64-linux; then
         md5_aarch64=$(md5sum /tmp/pixelterm-arm64-linux | cut -d' ' -f1)
         echo "aarch64 checksum: ${md5_aarch64}"
     else
