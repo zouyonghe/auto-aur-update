@@ -36,8 +36,14 @@ if [ "$force_update" = "true" ] || [ "$current_ver" != "$latest_ver" ]; then
     echo "aarch64 checksum: ${md5_aarch64}"
     
     # 更新 PKGBUILD 中的校验和
-    sed -i "s/md5sums_x86_64=('[^']*')/md5sums_x86_64=('"${md5_x86_64}"')/" PKGBUILD
-    sed -i "s/md5sums_aarch64=('[^']*')/md5sums_aarch64=('"${md5_aarch64}"')/" PKGBUILD
+    # 使用更可靠的方式替换 md5sums
+    sed -i "s/^md5sums_x86_64=.*/md5sums_x86_64=('${md5_x86_64}')/" PKGBUILD
+    sed -i "s/^md5sums_aarch64=.*/md5sums_aarch64=('${md5_aarch64}')/" PKGBUILD
+    
+    # 验证 md5sums 是否已正确更新
+    echo "Verifying updated md5sums..."
+    grep "md5sums_x86_64" PKGBUILD
+    grep "md5sums_aarch64" PKGBUILD
     
     # 清理临时文件
     rm -f /tmp/pixelterm-amd64-linux /tmp/pixelterm-arm64-linux
