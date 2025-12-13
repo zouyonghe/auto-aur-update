@@ -12,6 +12,7 @@ latest_ver=$(curl -s https://api.github.com/repos/zouyonghe/PixelTerm-C/releases
 if [ "$current_ver" != "$latest_ver" ]; then
     echo "Version changed from $current_ver to $latest_ver, updating..."
     sed -i "s/pkgver=.*/pkgver=$latest_ver/" PKGBUILD
+    sed -i "s/pkgrel=.*/pkgrel=1/" PKGBUILD
     sudo -u builder updpkgsums
     makepkg --printsrcinfo > .SRCINFO
     rm -f pixelterm*
