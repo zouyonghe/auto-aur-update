@@ -25,15 +25,28 @@ if [ "$force_update" = "true" ] || [ "$current_ver" != "$latest_ver" ]; then
     url="https://github.com/zouyonghe/PixelTerm-C/releases/download/v${latest_ver}"
     
     echo "Downloading and calculating checksums for x86_64..."
-    wget -q "${url}/pixelterm-amd64-linux" -O /tmp/pixelterm-amd64-linux
-    md5_x86_64=$(md5sum /tmp/pixelterm-amd64-linux | cut -d' ' -f1)
+    if wget -q "${url}/pixelterm-amd64-linux" -O /tmp/pixelterm-amd64-linux; then
+        md5_x86_64=$(md5sum /tmp/pixelterm-amd64-linux | cut -d' ' -f1)
+        echo "x86_64 checksum: ${md5_x86_64}"
+    else
+        echo "Failed to download x86_64 binary"
+        exit 1
+    fi
     
     echo "Downloading and calculating checksums for aarch64..."
-    wget -q "${url}/pixelterm-arm64-linux" -O /tmp/pixelterm-arm64-linux
-    md5_aarch64=$(md5sum /tmp/pixelterm-arm64-linux | cut -d' ' -f1)
+    if wget -q "${url}/pixelterm-arm64-linux" -O /tmp/pixelterm-arm64-linux; then
+        md5_aarch64=$(md5sum /tmp/pixelterm-arm64-linux | cut -d' ' -f1)
+        echo "aarch64 checksum: ${md5_aarch64}"
+    else
+        echo "Failed to download aarch64 binary"
+        exit 1
+    fi
     
-    echo "x86_64 checksum: ${md5_x86_64}"
-    echo "aarch64 checksum: ${md5_aarch64}"
+    # 检查 md5 值是否有效
+    if [ -z "$md5_x86_64" ] || [ -z "$md5_aarch64" ]; then
+        echo "Error: MD5 checksums are empty"
+        exit 1
+    fi
     
     # 更新 PKGBUILD 中的校验和
     # 使用更可靠的方式替换 md5sums
@@ -44,6 +57,12 @@ if [ "$force_update" = "true" ] || [ "$current_ver" != "$latest_ver" ]; then
     echo "Verifying updated md5sums..."
     grep "md5sums_x86_64" PKGBUILD
     grep "md5sums_aarch64" PKGBUILD
+    
+    # 再次检查更新后的 md5sums 是否为空
+    if grep -q "md5sums_.*=('')" PKGBUILD; then
+        echo "Error: MD5 checksums in PKGBUILD are empty after update"
+        exit 1
+    fi
     
     # 清理临时文件
     rm -f /tmp/pixelterm-amd64-linux /tmp/pixelterm-arm64-linux
