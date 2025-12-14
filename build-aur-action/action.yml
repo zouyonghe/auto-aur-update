@@ -15,4 +15,3 @@ runs:
   args:
     - ${{ inputs.pkgdir }}
     - ${{ inputs.pkgname }}
-    - ${{ inputs.soucename }}

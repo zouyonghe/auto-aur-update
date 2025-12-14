@@ -1,6 +1,7 @@
 #!/bin/bash
 
-pkgname=$1
+pkgdir=$1
+pkgname=$2
 
 
 useradd builder -m
