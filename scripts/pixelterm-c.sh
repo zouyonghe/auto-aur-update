@@ -70,7 +70,7 @@ fi
 # 使用更可靠的方式替换 md5sums
 sed -i "s/^md5sums_x86_64=.*/md5sums_x86_64=('${md5_x86_64}')/" PKGBUILD
 sed -i "s/^md5sums_aarch64=.*/md5sums_aarch64=('${md5_aarch64}')/" PKGBUILD
-sed -i "s/^md5sums=.*/md5sums=('${md5_bash}'\\n         '${md5_zsh}'\\n         '${md5_fish}')/" PKGBUILD
+sed -i "s/^md5sums=.*/md5sums=('${md5_bash}' '${md5_zsh}' '${md5_fish}')/" PKGBUILD
 
 # 验证 md5sums 是否已正确更新
 echo "Verifying updated md5sums..."

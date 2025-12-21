@@ -18,9 +18,7 @@ source=("pixelterm.bash::https://raw.githubusercontent.com/zouyonghe/PixelTerm-C
 noextract=()
 md5sums_x86_64=('4f3a9d8b4435af2c2d819e5eacac3220')
 md5sums_aarch64=('532148cddee133f3b32f60276daea9b0')
-md5sums=('67d105f7e98bb962177b3c2e220ab6fb'
-         'e726f457846c359bf02f2337cdf47616'
-         '4b95ae41b4fa6cb9db20b13374fc5e50')
+md5sums=('67d105f7e98bb962177b3c2e220ab6fb' 'e726f457846c359bf02f2337cdf47616' '4b95ae41b4fa6cb9db20b13374fc5e50')
 
 prepare() {
   find "${srcdir}" -maxdepth 1 -type f -name 'pixelterm-*' ! -name "pixelterm-${pkgver}" -delete
