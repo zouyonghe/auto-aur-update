@@ -10,6 +10,12 @@ latest_ver=$(curl -sL https://api.github.com/repos/zouyonghe/PixelTerm-C/release
     | jq -r '.tag_name // empty' 2>/dev/null \
     | sed 's/^v//')
 if [ -z "$latest_ver" ]; then
+    latest_ver=$(curl -sL -o /dev/null -w '%{url_effective}' \
+        https://github.com/zouyonghe/PixelTerm-C/releases/latest \
+        | sed 's#.*/tag/##' \
+        | sed 's/^v//')
+fi
+if [ -z "$latest_ver" ]; then
     latest_ver=$(git ls-remote --tags https://github.com/zouyonghe/PixelTerm-C.git \
         | awk -F/ '{print $3}' \
         | grep -E '^[v]?[0-9]+(\\.[0-9]+)*$' \
