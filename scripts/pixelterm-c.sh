@@ -6,7 +6,21 @@ cd pixelterm-c
 current_ver=$(grep "pkgver=" PKGBUILD | cut -d"=" -f2)
 
 # 获取 GitHub 最新版本号
-latest_ver=$(curl -s https://api.github.com/repos/zouyonghe/PixelTerm-C/releases/latest | jq ".tag_name"|tr -d "v\"")
+latest_ver=$(curl -sL https://api.github.com/repos/zouyonghe/PixelTerm-C/releases/latest \
+    | jq -r '.tag_name // empty' 2>/dev/null \
+    | sed 's/^v//')
+if [ -z "$latest_ver" ]; then
+    latest_ver=$(git ls-remote --tags https://github.com/zouyonghe/PixelTerm-C.git \
+        | awk -F/ '{print $3}' \
+        | grep -E '^[v]?[0-9]+(\\.[0-9]+)*$' \
+        | sed 's/^v//' \
+        | sort -V \
+        | tail -n1)
+fi
+if [ -z "$latest_ver" ]; then
+    echo "Failed to determine latest version"
+    exit 1
+fi
 
 echo "Updating from $current_ver to $latest_ver (always update mode)..."
 sed -i "s/pkgver=.*/pkgver=$latest_ver/" PKGBUILD
