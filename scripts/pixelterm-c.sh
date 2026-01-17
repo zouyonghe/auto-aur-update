@@ -32,80 +32,40 @@ echo "Updating from $current_ver to $latest_ver (always update mode)..."
 sed -i "s/pkgver=.*/pkgver=$latest_ver/" PKGBUILD
 sed -i "s/pkgrel=.*/pkgrel=1/" PKGBUILD
 
-# 手动计算多架构校验和，避免 updpkgsums 的 bug
-url="https://github.com/zouyonghe/PixelTerm-C/releases/download/v${latest_ver}"
-comp_base="https://raw.githubusercontent.com/zouyonghe/PixelTerm-C/main/completions"
+# 手动计算源码包校验和，避免 updpkgsums 的 bug
+base_url="https://github.com/zouyonghe/PixelTerm-C"
+tarball_url="${base_url}/archive/refs/tags/v${latest_ver}.tar.gz"
 
-echo "Downloading and calculating checksums for x86_64..."
-if curl -sL "${url}/pixelterm-amd64-linux" -o /tmp/pixelterm-amd64-linux; then
-    md5_x86_64=$(md5sum /tmp/pixelterm-amd64-linux | cut -d' ' -f1)
-    echo "x86_64 checksum: ${md5_x86_64}"
+echo "Downloading and calculating checksum for source tarball..."
+if curl -sL "${tarball_url}" -o /tmp/pixelterm-c.tar.gz; then
+    sha256_src=$(sha256sum /tmp/pixelterm-c.tar.gz | cut -d' ' -f1)
+    echo "source tarball checksum: ${sha256_src}"
 else
-    echo "Failed to download x86_64 binary"
+    echo "Failed to download source tarball"
     exit 1
 fi
 
-echo "Downloading and calculating checksums for aarch64..."
-if curl -sL "${url}/pixelterm-arm64-linux" -o /tmp/pixelterm-arm64-linux; then
-    md5_aarch64=$(md5sum /tmp/pixelterm-arm64-linux | cut -d' ' -f1)
-    echo "aarch64 checksum: ${md5_aarch64}"
-else
-    echo "Failed to download aarch64 binary"
-    exit 1
-fi
-
-# 计算补全文件校验和
-echo "Downloading and calculating checksums for completions..."
-if curl -sL "${comp_base}/bash/pixelterm" -o /tmp/pixelterm.bash; then
-    md5_bash=$(md5sum /tmp/pixelterm.bash | cut -d' ' -f1)
-    echo "bash completion checksum: ${md5_bash}"
-else
-    echo "Failed to download bash completion"
-    exit 1
-fi
-
-if curl -sL "${comp_base}/zsh/_pixelterm" -o /tmp/pixelterm.zsh; then
-    md5_zsh=$(md5sum /tmp/pixelterm.zsh | cut -d' ' -f1)
-    echo "zsh completion checksum: ${md5_zsh}"
-else
-    echo "Failed to download zsh completion"
-    exit 1
-fi
-
-if curl -sL "${comp_base}/fish/pixelterm.fish" -o /tmp/pixelterm.fish; then
-    md5_fish=$(md5sum /tmp/pixelterm.fish | cut -d' ' -f1)
-    echo "fish completion checksum: ${md5_fish}"
-else
-    echo "Failed to download fish completion"
-    exit 1
-fi
-
-# 检查 md5 值是否有效
-if [ -z "$md5_x86_64" ] || [ -z "$md5_aarch64" ] || [ -z "$md5_bash" ] || [ -z "$md5_zsh" ] || [ -z "$md5_fish" ]; then
-    echo "Error: MD5 checksums are empty"
+# 检查 sha256 值是否有效
+if [ -z "$sha256_src" ]; then
+    echo "Error: SHA256 checksum is empty"
     exit 1
 fi
 
 # 更新 PKGBUILD 中的校验和
-# 使用更可靠的方式替换 md5sums
-sed -i "s/^md5sums_x86_64=.*/md5sums_x86_64=('${md5_x86_64}')/" PKGBUILD
-sed -i "s/^md5sums_aarch64=.*/md5sums_aarch64=('${md5_aarch64}')/" PKGBUILD
-sed -i "s/^md5sums=.*/md5sums=('${md5_bash}' '${md5_zsh}' '${md5_fish}')/" PKGBUILD
+sed -i "s/^sha256sums=.*/sha256sums=('${sha256_src}')/" PKGBUILD
 
-# 验证 md5sums 是否已正确更新
-echo "Verifying updated md5sums..."
-grep "md5sums_x86_64" PKGBUILD
-grep "md5sums_aarch64" PKGBUILD
-grep "^md5sums=" PKGBUILD
+# 验证 sha256sums 是否已正确更新
+echo "Verifying updated sha256sums..."
+grep "^sha256sums=" PKGBUILD
 
-# 再次检查更新后的 md5sums 是否为空
-if grep -q "md5sums_.*=('')" PKGBUILD || grep -q "^md5sums=('')" PKGBUILD; then
-    echo "Error: MD5 checksums in PKGBUILD are empty after update"
+# 再次检查更新后的 sha256sums 是否为空
+if grep -q "^sha256sums=('')" PKGBUILD; then
+    echo "Error: SHA256 checksums in PKGBUILD are empty after update"
     exit 1
 fi
 
 # 清理临时文件
-rm -f /tmp/pixelterm-amd64-linux /tmp/pixelterm-arm64-linux /tmp/pixelterm.bash /tmp/pixelterm.zsh /tmp/pixelterm.fish
+rm -f /tmp/pixelterm-c.tar.gz
 makepkg --printsrcinfo > .SRCINFO
 rm -f pixelterm*
 
