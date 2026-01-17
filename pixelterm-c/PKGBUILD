@@ -1,6 +1,6 @@
 # Maintainer: buding <1259085392z@gmail.com>
 pkgname=pixelterm-c
-pkgver=1.3.3
+pkgver=1.5.2
 pkgrel=1
 pkgdesc="A high-performance terminal image browser written in C, based on the Chafa library"
 arch=('x86_64' 'aarch64')
@@ -11,16 +11,16 @@ makedepends=('pkgconf')
 provides=('pixelterm-c')
 options=('!debug' '!strip')
 source=("pixelterm-c-${pkgver}.tar.gz::${url}/archive/refs/tags/v${pkgver}.tar.gz")
-sha256sums=('eefaf9fa8f5c721d4da02c3e1bcb91ffc5dfa2b4f9f960072c60396aaeb1afca')
+sha256sums=('ba1d7cd082edd1a31d8d572f0c7eb1fea60878552cef9094bef5f634ef900008')
 
 build() {
   cd "${srcdir}/PixelTerm-C-${pkgver}"
-  make
+  make VERSION="${pkgver}"
 }
 
 package() {
   cd "${srcdir}/PixelTerm-C-${pkgver}"
-  make DESTDIR="${pkgdir}" PREFIX=/usr install
+  make VERSION="${pkgver}" DESTDIR="${pkgdir}" PREFIX=/usr install
   install -Dm644 completions/bash/pixelterm "${pkgdir}/usr/share/bash-completion/completions/pixelterm"
   install -Dm644 completions/zsh/_pixelterm "${pkgdir}/usr/share/zsh/site-functions/_pixelterm"
   install -Dm644 completions/fish/pixelterm.fish "${pkgdir}/usr/share/fish/vendor_completions.d/pixelterm.fish"
