@@ -2,11 +2,12 @@
 pkgname=pixelterm-c
 pkgver=1.5.2
 pkgrel=1
-pkgdesc="A high-performance terminal image browser written in C, based on the Chafa library"
+pkgdesc="A high-performance terminal image/video/book browser written in C, based on the Chafa library"
 arch=('x86_64' 'aarch64')
 url="https://github.com/zouyonghe/PixelTerm-C"
 license=('LGPL-3.0-or-later')
 depends=('chafa' 'glib2' 'gdk-pixbuf2' 'ffmpeg')
+optdepends=('mupdf: PDF/EPUB/CBZ book support')
 makedepends=('pkgconf')
 provides=('pixelterm-c')
 options=('!debug' '!strip')
