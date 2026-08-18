@@ -1,16 +1,18 @@
 #!/bin/bash
 
-cd pixelterm-c
+set -o errexit -o nounset -o pipefail
+
+cd "$(dirname "$0")/../pixelterm-c"
 
 # 获取当前 PKGBUILD 中的版本号
 current_ver=$(grep "pkgver=" PKGBUILD | cut -d"=" -f2)
 
 # 获取 GitHub 最新版本号
-latest_ver=$(curl -sL https://api.github.com/repos/zouyonghe/PixelTerm-C/releases/latest \
+latest_ver=$(curl --fail --silent --show-error --location https://api.github.com/repos/zouyonghe/PixelTerm-C/releases/latest \
     | jq -r '.tag_name // empty' 2>/dev/null \
     | sed 's/^v//')
 if [ -z "$latest_ver" ]; then
-    latest_ver=$(curl -sL -o /dev/null -w '%{url_effective}' \
+    latest_ver=$(curl --fail --silent --show-error --location -o /dev/null -w '%{url_effective}' \
         https://github.com/zouyonghe/PixelTerm-C/releases/latest \
         | sed 's#.*/tag/##' \
         | sed 's/^v//')
@@ -18,7 +20,7 @@ fi
 if [ -z "$latest_ver" ]; then
     latest_ver=$(git ls-remote --tags https://github.com/zouyonghe/PixelTerm-C.git \
         | awk -F/ '{print $3}' \
-        | grep -E '^[v]?[0-9]+(\\.[0-9]+)*$' \
+        | grep -E '^v?[0-9]+(\.[0-9]+)*$' \
         | sed 's/^v//' \
         | sort -V \
         | tail -n1)
@@ -37,13 +39,9 @@ base_url="https://github.com/zouyonghe/PixelTerm-C"
 tarball_url="${base_url}/archive/refs/tags/v${latest_ver}.tar.gz"
 
 echo "Downloading and calculating checksum for source tarball..."
-if curl -sL "${tarball_url}" -o /tmp/pixelterm-c.tar.gz; then
-    sha256_src=$(sha256sum /tmp/pixelterm-c.tar.gz | cut -d' ' -f1)
-    echo "source tarball checksum: ${sha256_src}"
-else
-    echo "Failed to download source tarball"
-    exit 1
-fi
+curl --fail --silent --show-error --location "${tarball_url}" -o /tmp/pixelterm-c.tar.gz
+sha256_src=$(sha256sum /tmp/pixelterm-c.tar.gz | cut -d' ' -f1)
+echo "source tarball checksum: ${sha256_src}"
 
 # 检查 sha256 值是否有效
 if [ -z "$sha256_src" ]; then
