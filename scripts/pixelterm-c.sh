@@ -32,7 +32,13 @@ fi
 
 echo "Updating from $current_ver to $latest_ver (always update mode)..."
 sed -i "s/pkgver=.*/pkgver=$latest_ver/" PKGBUILD
-sed -i "s/pkgrel=.*/pkgrel=1/" PKGBUILD
+if [ "$latest_ver" = "$current_ver" ]; then
+    # Rebuild current release for dependency ABI changes.
+    sed -i "s/pkgrel=.*/pkgrel=2/" PKGBUILD
+else
+    # New upstream version starts a fresh package release.
+    sed -i "s/pkgrel=.*/pkgrel=1/" PKGBUILD
+fi
 
 # 手动计算源码包校验和，避免 updpkgsums 的 bug
 base_url="https://github.com/zouyonghe/PixelTerm-C"
