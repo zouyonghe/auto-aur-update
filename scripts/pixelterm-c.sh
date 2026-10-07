@@ -4,7 +4,20 @@ set -o errexit -o nounset -o pipefail
 
 cd "$(dirname "$0")/../pixelterm-c"
 
-# 获取当前 PKGBUILD 中的版本号
+# AUR is the published state. This workflow's checkout is only a template and
+# is not pushed back to this repository after the deploy action runs.
+aur_dir=$(mktemp -d)
+trap 'rm -rf "$aur_dir"' EXIT
+if git clone --quiet --depth=1 https://aur.archlinux.org/pixelterm-c.git "$aur_dir/package"; then
+    cp "$aur_dir/package/PKGBUILD" PKGBUILD
+else
+    echo "Failed to read current PKGBUILD from AUR" >&2
+    exit 1
+fi
+
+# Read version from the package actually published in AUR. The checkout's
+# PKGBUILD is only a template; deploy-aur publishes it to AUR without updating
+# this repository's checkout.
 current_ver=$(grep "pkgver=" PKGBUILD | cut -d"=" -f2)
 
 # 获取 GitHub 最新版本号
@@ -33,7 +46,7 @@ fi
 echo "Updating from $current_ver to $latest_ver (always update mode)..."
 sed -i "s/pkgver=.*/pkgver=$latest_ver/" PKGBUILD
 if [ "$latest_ver" = "$current_ver" ]; then
-    # Rebuild current release for dependency ABI changes.
+    # One-time rebuild for dependency ABI changes within this upstream release.
     sed -i "s/pkgrel=.*/pkgrel=2/" PKGBUILD
 else
     # New upstream version starts a fresh package release.
