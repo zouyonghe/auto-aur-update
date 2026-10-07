@@ -38,11 +38,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./build-aur-action
-        env:
-          REBUILD_CURRENT: ${{ inputs.rebuild_current || 'false' }}
         with:
           pkgname: ${{ matrix.PKGBUILDs }}
           pkgdir: ${{ matrix.PKGBUILDs }}
+          rebuild_current: ${{ inputs.rebuild_current || 'false' }}
 
       - name: Publish AUR package
         uses: ./.github/actions/deploy-aur

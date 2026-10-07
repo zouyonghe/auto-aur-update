@@ -9,9 +9,14 @@ inputs:
   pkgname:
     description: 'AUR package / repository name'
     required: true
+  rebuild_current:
+    description: 'Rebuild current package version for dependency ABI changes'
+    required: false
+    default: 'false'
 runs:
   using: 'docker'
   image: 'Dockerfile'
   args:
     - ${{ inputs.pkgdir }}
     - ${{ inputs.pkgname }}
+    - ${{ inputs.rebuild_current }}
