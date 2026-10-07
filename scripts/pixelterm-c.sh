@@ -4,18 +4,32 @@ set -o errexit -o nounset -o pipefail
 
 cd "$(dirname "$0")/../pixelterm-c"
 
-# 获取当前 PKGBUILD 中的版本号
-current_ver=$(grep "pkgver=" PKGBUILD | cut -d"=" -f2)
+# Read only generated metadata from AUR; never source or copy its PKGBUILD.
+aur_dir=$(mktemp -d)
+trap 'rm -rf "$aur_dir"' EXIT
+if git clone --quiet --depth=1 https://aur.archlinux.org/pixelterm-c.git "$aur_dir/package"; then
+    aur_srcinfo="$aur_dir/package/.SRCINFO"
+else
+    echo "Failed to read current package metadata from AUR" >&2
+    exit 1
+fi
+
+current_ver=$(sed -n 's/^[[:space:]]*pkgver = //p' "$aur_srcinfo" | head -n1)
+current_rel=$(sed -n 's/^[[:space:]]*pkgrel = //p' "$aur_srcinfo" | head -n1)
+if [[ ! "$current_ver" =~ ^[0-9]+(\.[0-9]+)*$ || ! "$current_rel" =~ ^[0-9]+$ ]]; then
+    echo "Invalid pkgver/pkgrel in AUR .SRCINFO" >&2
+    exit 1
+fi
 
 # 获取 GitHub 最新版本号
 latest_ver=$(curl --fail --silent --show-error --location https://api.github.com/repos/zouyonghe/PixelTerm-C/releases/latest \
     | jq -r '.tag_name // empty' 2>/dev/null \
-    | sed 's/^v//')
+    | sed 's/^v//' || true)
 if [ -z "$latest_ver" ]; then
     latest_ver=$(curl --fail --silent --show-error --location -o /dev/null -w '%{url_effective}' \
         https://github.com/zouyonghe/PixelTerm-C/releases/latest \
         | sed 's#.*/tag/##' \
-        | sed 's/^v//')
+        | sed 's/^v//' || true)
 fi
 if [ -z "$latest_ver" ]; then
     latest_ver=$(git ls-remote --tags https://github.com/zouyonghe/PixelTerm-C.git \
@@ -23,21 +37,31 @@ if [ -z "$latest_ver" ]; then
         | grep -E '^v?[0-9]+(\.[0-9]+)*$' \
         | sed 's/^v//' \
         | sort -V \
-        | tail -n1)
+        | tail -n1 || true)
 fi
-if [ -z "$latest_ver" ]; then
+if [[ ! "$latest_ver" =~ ^[0-9]+(\.[0-9]+)*$ ]]; then
     echo "Failed to determine latest version"
     exit 1
 fi
 
 echo "Updating from $current_ver to $latest_ver (always update mode)..."
+version_order=$(vercmp "$latest_ver" "$current_ver")
+if (( version_order < 0 )); then
+    echo "Latest upstream version $latest_ver is older than AUR version $current_ver" >&2
+    exit 1
+fi
+
 sed -i "s/pkgver=.*/pkgver=$latest_ver/" PKGBUILD
-if [ "$latest_ver" = "$current_ver" ]; then
-    # Rebuild current release for dependency ABI changes.
-    sed -i "s/pkgrel=.*/pkgrel=2/" PKGBUILD
-else
+if (( version_order > 0 )); then
     # New upstream version starts a fresh package release.
     sed -i "s/pkgrel=.*/pkgrel=1/" PKGBUILD
+else
+    # Keep the template aligned with published metadata without lowering pkgrel.
+    sed -i "s/pkgrel=.*/pkgrel=$current_rel/" PKGBUILD
+    if [[ "${REBUILD_CURRENT:-false}" == true ]] && (( current_rel < 2 )); then
+        # Opt-in, idempotent one-time rebuild for dependency ABI changes.
+        sed -i "s/pkgrel=.*/pkgrel=2/" PKGBUILD
+    fi
 fi
 
 # 手动计算源码包校验和，避免 updpkgsums 的 bug

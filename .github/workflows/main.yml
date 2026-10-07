@@ -5,9 +5,19 @@ on:
   schedule:
   - cron: "30 2 * * *"
   workflow_dispatch:
+    inputs:
+      rebuild_current:
+        description: Rebuild current AUR version once for dependency ABI changes
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
+
+concurrency:
+  group: auto-aur-update
+  cancel-in-progress: false
 
 jobs:
   # This workflow contains a single job called "build"
@@ -28,6 +38,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./build-aur-action
+        env:
+          REBUILD_CURRENT: ${{ inputs.rebuild_current || 'false' }}
         with:
           pkgname: ${{ matrix.PKGBUILDs }}
           pkgdir: ${{ matrix.PKGBUILDs }}
