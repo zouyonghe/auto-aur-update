@@ -1,0 +1,82 @@
+import importlib.util
+from pathlib import Path
+import unittest
+
+SCRIPT = Path(__file__).resolve().parents[1] / 'scripts/astrbot-desktop-bin.py'
+
+
+class UpdateTests(unittest.TestCase):
+    def setUp(self):
+        self.assertTrue(SCRIPT.is_file(), 'AstrBot updater is not implemented')
+        spec = importlib.util.spec_from_file_location('astrbot_update', SCRIPT)
+        self.module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.module)
+        self.template = (SCRIPT.parent.parent / 'astrbot-desktop-bin/PKGBUILD').read_text()
+        self.release = {
+            'tag_name': 'v4.30.0', 'draft': False, 'prerelease': False,
+            'assets': [
+                {'name': 'AstrBot_4.30.0_linux_amd64.deb', 'digest': 'sha256:' + 'a' * 64},
+                {'name': 'AstrBot_4.30.0_linux_arm64.deb', 'digest': 'sha256:' + 'b' * 64},
+            ],
+        }
+
+    def test_new_release_updates_both_architectures_and_resets_pkgrel(self):
+        result = self.module.update(self.template, self.release, {'Version': '4.29.1-5'})
+        self.assertIn('pkgver=4.30.0\npkgrel=1', result)
+        self.assertIn("sha256sums_x86_64=('" + 'a' * 64 + "')", result)
+        self.assertIn("sha256sums_aarch64=('" + 'b' * 64 + "')", result)
+
+    def test_first_publication_needs_no_existing_aur_package(self):
+        self.assertIn('pkgver=4.30.0\npkgrel=1', self.module.update(self.template, self.release, None))
+
+    def test_same_release_preserves_higher_aur_pkgrel(self):
+        result = self.module.update(self.template, self.release, {'Version': '4.30.0-7'})
+        self.assertIn('pkgrel=7', result)
+
+    def test_dotted_pkgrel_is_preserved(self):
+        result = self.module.update(self.template, self.release, {'Version': '4.30.0-1.1'})
+        self.assertIn('pkgrel=1.1', result)
+
+    def test_changed_same_version_checksum_increments_pkgrel(self):
+        current = {
+            'Version': '4.30.0-7',
+            'Checksums': {'x86_64': 'c' * 64, 'aarch64': 'b' * 64},
+        }
+        result = self.module.update(self.template, self.release, current)
+        self.assertIn('pkgrel=8', result)
+
+    def test_same_version_checksum_match_does_not_increment_pkgrel(self):
+        current = {
+            'Version': '4.30.0-7',
+            'Checksums': {'x86_64': 'a' * 64, 'aarch64': 'b' * 64},
+        }
+        result = self.module.update(self.template, self.release, current)
+        self.assertIn('pkgrel=7', result)
+
+    def test_bumped_template_pkgrel_survives_new_upstream_version(self):
+        template = self.template.replace('pkgver=4.29.1\npkgrel=1', 'pkgver=4.29.1\npkgrel=3')
+        result = self.module.update(template, self.release, {'Version': '4.29.1-1'})
+        self.assertIn('pkgrel=3', result)
+
+    def test_rejects_downgrade(self):
+        with self.assertRaises(ValueError):
+            self.module.update(self.template, self.release, {'Version': '4.31.0-1'})
+
+    def test_rejects_missing_asset_invalid_checksum_and_nonstable_release(self):
+        for change in ('asset', 'checksum', 'prerelease', 'tag', 'draft'):
+            with self.subTest(change=change):
+                release = {**self.release, 'assets': [dict(x) for x in self.release['assets']]}
+                if change == 'asset':
+                    release['assets'].pop()
+                elif change == 'checksum':
+                    release['assets'][0]['digest'] = None
+                elif change == 'tag':
+                    release['tag_name'] = 'nightly'
+                else:
+                    release[change] = True
+                with self.assertRaises(ValueError):
+                    self.module.update(self.template, release, None)
+
+
+if __name__ == '__main__':
+    unittest.main()
