@@ -33,6 +33,31 @@ class UpdateTests(unittest.TestCase):
         result = self.module.update(self.template, self.release, {'Version': '4.30.0-7'})
         self.assertIn('pkgrel=7', result)
 
+    def test_dotted_pkgrel_is_preserved(self):
+        result = self.module.update(self.template, self.release, {'Version': '4.30.0-1.1'})
+        self.assertIn('pkgrel=1.1', result)
+
+    def test_changed_same_version_checksum_increments_pkgrel(self):
+        current = {
+            'Version': '4.30.0-7',
+            'Checksums': {'x86_64': 'c' * 64, 'aarch64': 'b' * 64},
+        }
+        result = self.module.update(self.template, self.release, current)
+        self.assertIn('pkgrel=8', result)
+
+    def test_same_version_checksum_match_does_not_increment_pkgrel(self):
+        current = {
+            'Version': '4.30.0-7',
+            'Checksums': {'x86_64': 'a' * 64, 'aarch64': 'b' * 64},
+        }
+        result = self.module.update(self.template, self.release, current)
+        self.assertIn('pkgrel=7', result)
+
+    def test_bumped_template_pkgrel_survives_new_upstream_version(self):
+        template = self.template.replace('pkgver=4.29.1\npkgrel=1', 'pkgver=4.29.1\npkgrel=3')
+        result = self.module.update(template, self.release, {'Version': '4.29.1-1'})
+        self.assertIn('pkgrel=3', result)
+
     def test_rejects_downgrade(self):
         with self.assertRaises(ValueError):
             self.module.update(self.template, self.release, {'Version': '4.31.0-1'})

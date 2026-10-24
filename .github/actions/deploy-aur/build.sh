@@ -57,13 +57,36 @@ git config --global user.email "$commit_email"
 echo '::endgroup::'
 
 echo '::group::Cloning AUR package into /tmp/local-repo'
-git clone -v "https://aur.archlinux.org/${pkgname}.git" /tmp/local-repo
+if git clone -v "https://aur.archlinux.org/${pkgname}.git" /tmp/local-repo; then
+  echo 'Cloned existing AUR package.'
+else
+  echo 'AUR package does not exist yet; initializing first publication.'
+  rm -rf /tmp/local-repo
+  mkdir -p /tmp/local-repo
+  git -C /tmp/local-repo init
+  git -C /tmp/local-repo checkout -b master
+fi
 echo '::endgroup::'
 
 echo '::group::Copying files into /tmp/local-repo'
 {
   echo "Copying $pkgbuild"
-  cp -r "$pkgbuild" /tmp/local-repo/
+  cp -r "$pkgbuild" /tmp/generated-PKGBUILD
+  if [[ -f /tmp/local-repo/PKGBUILD ]]; then
+    incoming_version=$(sed -n 's/^pkgver=//p' /tmp/generated-PKGBUILD)
+    existing_version=$(sed -n 's/^pkgver=//p' /tmp/local-repo/PKGBUILD)
+    incoming_rel=$(sed -n 's/^pkgrel=//p' /tmp/generated-PKGBUILD)
+    existing_rel=$(sed -n 's/^pkgrel=//p' /tmp/local-repo/PKGBUILD)
+    if (( $(vercmp "$existing_version" "$incoming_version") > 0 )); then
+      echo "AUR has newer pkgver ${existing_version}; refusing to overwrite it." >&2
+      exit 1
+    fi
+    if [[ "$existing_version" == "$incoming_version" ]] && (( $(vercmp "$existing_rel" "$incoming_rel") > 0 )); then
+      sed -i "s/^pkgrel=.*/pkgrel=${existing_rel}/" /tmp/generated-PKGBUILD
+      echo "Preserved newer AUR pkgrel ${existing_rel}."
+    fi
+  fi
+  cp /tmp/generated-PKGBUILD /tmp/local-repo/PKGBUILD
 }
 if [[ -n "$assets" ]]; then
   echo 'Copying' $assets
