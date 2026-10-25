@@ -47,7 +47,16 @@ exec "$REAL_GIT" "$@"
             curl_shim.write_text('#!/bin/sh\n[ "$SIMULATE_API_FAILURE" != true ] || exit 22\nprintf "%s\\n" "$AUR_COUNT_JSON"\n')
             curl_shim.chmod(0o755)
             jq_shim = root / 'jq'
-            jq_shim.write_text('#!/bin/sh\n[ "$AUR_COUNT" != not-json ] || exit 4\nprintf "%s\\n" "$AUR_COUNT"\n')
+            jq_shim.write_text('''#!/bin/sh
+set -eu
+if [[ "$*" == *'.type'* ]]; then
+  [[ "$AUR_COUNT" != rpc-error ]] || { echo error; exit 0; }
+  echo multiinfo
+else
+  [[ "$AUR_COUNT" != not-json ]] || exit 4
+  echo "${AUR_COUNT}"
+fi
+''')
             jq_shim.chmod(0o755)
             block = SCRIPT.read_text().split("echo '::group::Cloning AUR package into /tmp/local-repo'", 1)[1]
             block = block.split("echo '::group::Copying files into /tmp/local-repo'", 1)[0]
@@ -59,7 +68,8 @@ exec "$REAL_GIT" "$@"
                    'REAL_GIT': real_git, 'TEST_REMOTE': str(remote),
                    'SIMULATE_FAILURE': str(fail).lower(), 'AUR_COUNT': api_count,
                    'SIMULATE_API_FAILURE': str(api_count == 'api-failure').lower(),
-                   'AUR_COUNT_JSON': '{"resultcount": ' + ('1' if api_count == 'api-failure' else api_count) + '}'}
+                   'AUR_COUNT_JSON': ('{"type":"error","resultcount":0}' if api_count == 'rpc-error'
+                                     else '{"type":"multiinfo","resultcount": ' + api_count + '}')}
             setup = '\n'.join(['set -euo pipefail', 'pkgname=test-package',
                                f"expected_revision_file='{revision_file if expected else ''}'",
                                f'force_push={str(force).lower()}', block])
@@ -109,6 +119,11 @@ exec "$REAL_GIT" "$@"
 
     def test_api_failure_is_fail_closed(self):
         result, exists, _ = self.run_clone(api_count='api-failure')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(exists)
+
+    def test_rpc_error_with_zero_count_is_not_absence(self):
+        result, exists, _ = self.run_clone(api_count='rpc-error')
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse(exists)
 

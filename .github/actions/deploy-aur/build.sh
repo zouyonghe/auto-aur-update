@@ -77,6 +77,8 @@ echo '::group::Cloning AUR package into /tmp/local-repo'
 # failure alone is never evidence of absence; transport errors fail closed.
 aur_info=$(curl --fail --silent --show-error --get \
   --data-urlencode "arg[]=${pkgname}" https://aur.archlinux.org/rpc/v5/info)
+aur_type=$(jq -er '.type' <<< "$aur_info")
+[[ "$aur_type" == multiinfo ]] || { echo 'AUR RPC returned an error.' >&2; exit 1; }
 aur_count=$(jq -er '.resultcount' <<< "$aur_info")
 if [[ "$aur_count" == 0 ]]; then
   if [[ "$force_push" != false ]]; then

@@ -131,7 +131,10 @@ def read_current():
 
 def verify_release(package, release):
     # A second update must not change the built version or either payload digest.
-    if update(package, release, None) != package:
+    upstream = 'https://github.com/AstrBotDevs/AstrBot-desktop'
+    canonical_package = package.replace(upstream, '${url}')
+    canonical_update = update(canonical_package, release, None)
+    if canonical_update != canonical_package:
         raise ValueError('Stable release changed after build; rerun preparation')
 
 
