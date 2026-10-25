@@ -32,7 +32,7 @@ class UpdateTests(unittest.TestCase):
 
     def test_same_release_preserves_higher_aur_pkgrel(self):
         result = self.module.update(self.template, self.release, {'Version': '4.30.0-7'})
-        self.assertIn('pkgrel=7', result)
+        self.assertEqual([line for line in result.splitlines() if line.startswith('pkgrel=')], ['pkgrel=7'])
 
     def test_dotted_pkgrel_is_preserved(self):
         result = self.module.update(self.template, self.release, {'Version': '4.30.0-1.1'})
@@ -89,6 +89,31 @@ class UpdateTests(unittest.TestCase):
     def test_verify_accepts_built_release(self):
         built = self.module.update(self.template, self.release, None)
         self.module.verify_release(built, self.release)
+
+    def test_verify_preserves_prepared_revisions(self):
+        built = self.module.update(self.template, self.release, None)
+        for revision in ('7', '1.1'):
+            with self.subTest(revision=revision):
+                self.module.verify_release(built.replace('pkgrel=1\n', f'pkgrel={revision}\n'), self.release)
+
+    def test_update_preserves_existing_aur_epoch(self):
+        result = self.module.update(self.template, self.release, {'Version': '2:4.30.0-7'})
+        self.assertIn('epoch=2', result.splitlines())
+        self.assertIn('pkgrel=7', result.splitlines())
+
+    def test_explicit_epoch_upgrade_allows_lower_upstream_version(self):
+        template = 'epoch=3\n' + self.template
+        result = self.module.update(template, self.release, {'Version': '2:5.0.0-9'})
+        self.assertIn('epoch=3', result.splitlines())
+        self.assertIn('pkgver=4.30.0', result.splitlines())
+
+    def test_read_current_accepts_epoch_in_rpc(self):
+        srcinfo = 'pkgver = 4.29.1\npkgrel = 1\nepoch = 2\n'
+        srcinfo += 'sha256sums_x86_64 = ' + 'a' * 64 + '\nsha256sums_aarch64 = ' + 'b' * 64 + '\n'
+        with mock.patch.object(self.module, 'read_json', return_value={
+                'type': 'multiinfo', 'results': [{'Version': '2:4.29.1-1'}]}), \
+                mock.patch.object(self.module.subprocess, 'check_output', side_effect=['', 'f' * 40, srcinfo]):
+            self.assertEqual(self.module.read_current()['Version'], '2:4.29.1-1')
 
     def test_rejects_missing_asset_invalid_checksum_and_nonstable_release(self):
         for change in ('asset', 'checksum', 'prerelease', 'tag', 'draft'):

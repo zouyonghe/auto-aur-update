@@ -84,7 +84,10 @@ jobs:
         run: python3 scripts/astrbot-desktop-bin.py --verify
       - name: Publish AUR metadata
         uses: ./.github/actions/deploy-aur
+        env:
+          GH_TOKEN: ${{ github.token }}
         with:
+          release_verifier: scripts/astrbot-desktop-bin.py
           pkgname: astrbot-desktop-bin
           pkgbuild: astrbot-desktop-bin/PKGBUILD
           expected_revision_file: astrbot-desktop-bin/aur-revision

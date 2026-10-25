@@ -18,6 +18,10 @@ allow_empty_commits=$INPUT_ALLOW_EMPTY_COMMITS
 force_push=$INPUT_FORCE_PUSH
 ssh_keyscan_types=$INPUT_SSH_KEYSCAN_TYPES
 expected_revision_file=${INPUT_EXPECTED_REVISION_FILE:-}
+release_verifier=${INPUT_RELEASE_VERIFIER:-}
+if [[ -n "$release_verifier" ]]; then
+  release_verifier=$(realpath "$release_verifier")
+fi
 
 assert_non_empty() {
   name=$1
@@ -98,6 +102,8 @@ echo '::group::Copying files into /tmp/local-repo'
     existing_version=$(sed -n 's/^pkgver=//p' /tmp/local-repo/PKGBUILD)
     incoming_rel=$(sed -n 's/^pkgrel=//p' /tmp/generated-PKGBUILD)
     existing_rel=$(sed -n 's/^pkgrel=//p' /tmp/local-repo/PKGBUILD)
+    incoming_epoch=$(sed -n 's/^epoch=//p' /tmp/generated-PKGBUILD)
+    existing_epoch=$(sed -n 's/^epoch=//p' /tmp/local-repo/PKGBUILD)
     # Cloned values are data, not shell or sed programs. Never source them.
     for version in "$incoming_version" "$existing_version"; do
       [[ "$version" =~ ^[a-zA-Z0-9._+]+$ ]] || { echo 'Invalid pkgver.' >&2; exit 1; }
@@ -105,11 +111,16 @@ echo '::group::Copying files into /tmp/local-repo'
     for revision in "$incoming_rel" "$existing_rel"; do
       [[ "$revision" =~ ^[0-9]+([.][0-9]+)*$ ]] || { echo 'Invalid pkgrel.' >&2; exit 1; }
     done
-    if (( $(vercmp "$existing_version" "$incoming_version") > 0 )); then
+    for epoch in "${incoming_epoch:-0}" "${existing_epoch:-0}"; do
+      [[ "$epoch" =~ ^[0-9]+$ ]] || { echo 'Invalid epoch.' >&2; exit 1; }
+    done
+    incoming_base="${incoming_epoch:-0}:$incoming_version"
+    existing_base="${existing_epoch:-0}:$existing_version"
+    if (( $(vercmp "$existing_base" "$incoming_base") > 0 )); then
       echo "AUR has newer pkgver ${existing_version}; refusing to overwrite it." >&2
       exit 1
     fi
-    if [[ "$existing_version" == "$incoming_version" ]] &&
+    if (( $(vercmp "$existing_base" "$incoming_base") == 0 )) &&
        (( $(vercmp "$incoming_rel" "$existing_rel") <= 0 )) &&
        ! cmp -s /tmp/generated-PKGBUILD /tmp/local-repo/PKGBUILD; then
       echo 'Changed package requires a strictly higher pkgrel; refusing overwrite.' >&2
@@ -195,6 +206,11 @@ echo '::endgroup::'
 
 echo '::group::Publishing the repository'
 git remote add aur "ssh://aur@aur.archlinux.org/${pkgname}.git"
+if [[ -n "$release_verifier" ]]; then
+  # Verify committed bytes, not a working tree that hooks may have changed.
+  git show HEAD:PKGBUILD > /tmp/committed-PKGBUILD
+  python3 "$release_verifier" --verify --package /tmp/committed-PKGBUILD
+fi
 case "$force_push" in
 true)
   git push -v --force aur master

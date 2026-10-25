@@ -20,6 +20,13 @@ def max_pkgrel(*values):
     return max(values, key=lambda value: pkgrel_parts(value))
 
 
+def parse_version(value):
+    match = re.fullmatch(r'(?:([0-9]+):)?([0-9]+\.[0-9]+\.[0-9]+)-([0-9]+(?:\.[0-9]+)*)', value)
+    if not match:
+        raise ValueError('Unexpected AUR version format')
+    return int(match[1] or 0), match[2], match[3]
+
+
 def update(template, release, current):
     tag = release.get('tag_name', '')
     if release.get('draft') or release.get('prerelease') or not re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+', tag):
@@ -27,22 +34,27 @@ def update(template, release, current):
     version = tag[1:]
     template_pkgrel = re.search(r'^pkgrel=([0-9]+(?:\.[0-9]+)*)$', template, re.M)[1]
     local_version = re.search(r'^pkgver=([0-9.]+)$', template, re.M)[1]
-    versions = [(local_version, template_pkgrel)]
-    current_pkgrel = None
+    epoch_fields = re.findall(r'^epoch=(.*)$', template, re.M)
+    if len(epoch_fields) > 1 or (epoch_fields and not re.fullmatch(r'[0-9]+', epoch_fields[0])):
+        raise ValueError('Invalid template epoch')
+    local_epoch = int(epoch_fields[0]) if epoch_fields else 0
+    current_epoch, current_version, current_pkgrel = parse_version(current['Version']) if current else (0, None, None)
+    epoch = max(local_epoch, current_epoch)
+    versions = [(local_epoch, local_version, template_pkgrel)]
     if current:
-        match = re.fullmatch(r'([0-9]+\.[0-9]+\.[0-9]+)-([0-9]+(?:\.[0-9]+)*)', current['Version'])
-        if not match:
-            raise ValueError('Unexpected AUR version format')
-        current_pkgrel = match[2]
-        versions.append((match[1], current_pkgrel))
+        versions.append((current_epoch, current_version, current_pkgrel))
     pkgrel = template_pkgrel if local_version != version else '1'
-    for previous, revision in versions:
-        if tuple(map(int, previous.split('.'))) > tuple(map(int, version.split('.'))):
+    for previous_epoch, previous, revision in versions:
+        if (previous_epoch, tuple(map(int, previous.split('.')))) > (epoch, tuple(map(int, version.split('.')))):
             raise ValueError('Refusing to downgrade the package')
-        if previous == version:
+        if previous_epoch == epoch and previous == version:
             pkgrel = max_pkgrel(pkgrel, revision)
     result = re.sub(r'^pkgver=.*$', f'pkgver={version}', template, flags=re.M)
     result = re.sub(r'^pkgrel=.*$', f'pkgrel={pkgrel}', result, flags=re.M)
+    if epoch_fields:
+        result = re.sub(r'^epoch=.*$', f'epoch={epoch}', result, flags=re.M)
+    elif epoch:
+        result = f'epoch={epoch}\n' + result
     checksums = {}
     for arch, debarch in [('x86_64', 'amd64'), ('aarch64', 'arm64')]:
         name = f'AstrBot_{version}_linux_{debarch}.deb'
@@ -54,7 +66,7 @@ def update(template, release, current):
         result, count = re.subn(rf'^sha256sums_{arch}=.*$', f"sha256sums_{arch}=('{checksum}')", result, flags=re.M)
         if count != 1:
             raise ValueError(f'Missing checksum field for {arch}')
-    if current and current['Version'].rsplit('-', 1)[0] == version and current.get('Checksums'):
+    if current and current_epoch == epoch and current_version == version and current.get('Checksums'):
         if any(current['Checksums'].get(arch) != checksum for arch, checksum in checksums.items()):
             pkgrel = max_pkgrel(pkgrel, current_pkgrel)
             # Advance the final numeric revision component after a replacement.
@@ -85,12 +97,18 @@ def read_current():
                                  'https://aur.archlinux.org/astrbot-desktop-bin.git', directory], timeout=60)
         revision = subprocess.check_output(['git', '-C', directory, 'rev-parse', 'HEAD'], text=True, timeout=30).strip()
         srcinfo = subprocess.check_output(['git', '-C', directory, 'show', 'HEAD:.SRCINFO'], text=True, timeout=30)
-    def field(name):
+    def field(name, default=None):
         values = re.findall(rf'^\s*{name} = (.+)$', srcinfo, re.M)
+        if not values and default is not None:
+            return default
         if len(values) != 1:
             raise ValueError(f'Missing or ambiguous AUR {name}')
         return values[0]
-    if f"{field('pkgver')}-{field('pkgrel')}" != current['Version']:
+    epoch = field('epoch', '0')
+    if not re.fullmatch(r'[0-9]+', epoch):
+        raise ValueError('Invalid AUR epoch')
+    srcinfo_version = f"{epoch}:{field('pkgver')}-{field('pkgrel')}"
+    if parse_version(srcinfo_version) != parse_version(current['Version']):
         raise ValueError('AUR RPC and Git versions differ; retry later')
     current['Checksums'] = {arch: field(f'sha256sums_{arch}') for arch in ('x86_64', 'aarch64')}
     if not all(re.fullmatch(r'[0-9a-f]{64}', checksum) for checksum in current['Checksums'].values()):
@@ -108,9 +126,10 @@ def verify_release(package, release):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--verify', action='store_true')
+    parser.add_argument('--package', type=Path, default=Path(__file__).resolve().parents[1] / 'astrbot-desktop-bin/PKGBUILD')
     args = parser.parse_args()
     release = read_json('https://api.github.com/repos/AstrBotDevs/AstrBot-desktop/releases/latest', os.environ.get('GH_TOKEN'))
-    package = Path(__file__).resolve().parents[1] / 'astrbot-desktop-bin/PKGBUILD'
+    package = args.package
     if args.verify:
         verify_release(package.read_text(), release)
     else:

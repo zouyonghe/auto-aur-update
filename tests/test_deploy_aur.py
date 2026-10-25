@@ -153,6 +153,13 @@ class DeploymentTests(unittest.TestCase):
                                    'pkgver=4.29.1\npkgrel=3\n# reviewed change\n', accepted=True)
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_higher_epoch_allows_lower_pkgver_or_pkgrel(self):
+        for version in ('4.29.1', '4.28.0'):
+            with self.subTest(version=version):
+                result = self.copy_package('epoch=1\npkgver=4.29.1\npkgrel=7\n',
+                                           f'epoch=2\npkgver={version}\npkgrel=1\n', accepted=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_unpinned_ssh_host_key_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -172,6 +179,36 @@ class DeploymentTests(unittest.TestCase):
 
 
 class FinalPackageTests(unittest.TestCase):
+    def test_release_verification_runs_on_committed_bytes_and_blocks_push(self):
+        for stale in (False, True):
+            with self.subTest(stale=stale), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                env = {**os.environ, 'GIT_AUTHOR_NAME': 'Test', 'GIT_COMMITTER_NAME': 'Test',
+                       'GIT_AUTHOR_EMAIL': 'test@example.org', 'GIT_COMMITTER_EMAIL': 'test@example.org'}
+                subprocess.run(['git', 'init', directory], check=True, capture_output=True)
+                (root / 'PKGBUILD').write_text('committed package')
+                subprocess.run(['git', '-C', directory, 'add', '.'], check=True)
+                subprocess.run(['git', '-C', directory, 'commit', '-qm', 'initial'], env=env, check=True)
+                (root / 'PKGBUILD').write_text('uncommitted package')
+                verifier = root / 'verifier.py'
+                verifier.write_text('import sys\nfrom pathlib import Path\n'
+                                    'assert sys.argv[1:3] == ["--verify", "--package"]\n'
+                                    'assert Path(sys.argv[3]).read_text() == "committed package"\n'
+                                    f'sys.exit({23 if stale else 0})\n')
+                real_git = shutil.which('git')
+                shim = root / 'git'
+                shim.write_text('#!/bin/bash\n'
+                                'if [[ $1 == push ]]; then echo PUSH_REACHED; exit 0; fi\n'
+                                f'exec {real_git} "$@"\n')
+                shim.chmod(0o755)
+                block = SCRIPT.read_text().split("echo '::group::Publishing the repository'", 1)[1]
+                block = block.replace('/tmp/committed-PKGBUILD', str(root / 'committed'))
+                result = subprocess.run(['bash', '-c', 'set -euo pipefail\npkgname=test-package\nforce_push=false\nrelease_verifier=$1\n' + block,
+                                         'bash', str(verifier)], cwd=directory, text=True, capture_output=True,
+                                        env={**env, 'PATH': str(root) + os.pathsep + env['PATH']})
+                self.assertEqual(result.returncode, 23 if stale else 0, result.stderr)
+                self.assertEqual('PUSH_REACHED' in result.stdout, not stale)
+
     def run_final_package(self, *, change='', bump=False):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -205,6 +242,7 @@ class FinalPackageTests(unittest.TestCase):
                             "echo '::group::Publishing the repository'")
             result = subprocess.run(['bash', '-c', 'set -euo pipefail\nassets=helper.sh\nallow_empty_commits=false\ncommit_message=update\n' + block],
                                     cwd=directory, env=env, text=True, capture_output=True)
+            self.committed_asset = git('show', 'HEAD:helper.sh')
             return result, original == git('rev-parse', 'HEAD').strip()
 
     def test_final_changes_require_version_bump(self):
@@ -219,6 +257,7 @@ class FinalPackageTests(unittest.TestCase):
         result, unchanged = self.run_final_package(change='asset', bump=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse(unchanged)
+        self.assertEqual(self.committed_asset, 'changed asset')
 
     def test_identical_package_does_not_need_bump(self):
         result, unchanged = self.run_final_package()
