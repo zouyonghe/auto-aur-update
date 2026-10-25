@@ -59,13 +59,24 @@ def update(template, release, current):
     for arch, debarch in [('x86_64', 'amd64'), ('aarch64', 'arm64')]:
         name = f'AstrBot_{version}_linux_{debarch}.deb'
         assets = [a for a in release['assets'] if a['name'] == name]
-        if len(assets) != 1 or not re.fullmatch(r'sha256:[0-9a-f]{64}', assets[0].get('digest') or ''):
+        if (len(assets) != 1 or not re.fullmatch(r'[0-9]+', str(assets[0].get('id', '')))
+                or not re.fullmatch(r'sha256:[0-9a-f]{64}', assets[0].get('digest') or '')):
             raise ValueError(f'Missing asset or SHA256 digest: {name}')
+        asset_id = assets[0]['id']
         checksum = assets[0]['digest'].split(':')[1]
         checksums[arch] = checksum
         result, count = re.subn(rf'^sha256sums_{arch}=.*$', f"sha256sums_{arch}=('{checksum}')", result, flags=re.M)
         if count != 1:
             raise ValueError(f'Missing checksum field for {arch}')
+        api_url = f'https://api.github.com/repos/AstrBotDevs/AstrBot-desktop/releases/assets/{asset_id}'
+        result, count = re.subn(
+            rf'^source_{arch}=.*$',
+            f'source_{arch}=("AstrBot_${{pkgver}}_linux_{debarch}.deb::{api_url}")',
+            result,
+            flags=re.M,
+        )
+        if count != 1:
+            raise ValueError(f'Missing source field for {arch}')
     if current and current_epoch == epoch and current_version == version and current.get('Checksums'):
         if any(current['Checksums'].get(arch) != checksum for arch, checksum in checksums.items()):
             pkgrel = max_pkgrel(pkgrel, current_pkgrel)

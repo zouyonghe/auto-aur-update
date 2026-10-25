@@ -1,6 +1,7 @@
 import importlib.util
 from pathlib import Path
 import unittest
+import re
 from unittest import mock
 
 SCRIPT = Path(__file__).resolve().parents[1] / 'scripts/astrbot-desktop-bin.py'
@@ -16,8 +17,8 @@ class UpdateTests(unittest.TestCase):
         self.release = {
             'tag_name': 'v4.30.0', 'draft': False, 'prerelease': False,
             'assets': [
-                {'name': 'AstrBot_4.30.0_linux_amd64.deb', 'digest': 'sha256:' + 'a' * 64},
-                {'name': 'AstrBot_4.30.0_linux_arm64.deb', 'digest': 'sha256:' + 'b' * 64},
+                {'id': 430001, 'name': 'AstrBot_4.30.0_linux_amd64.deb', 'digest': 'sha256:' + 'a' * 64},
+                {'id': 430002, 'name': 'AstrBot_4.30.0_linux_arm64.deb', 'digest': 'sha256:' + 'b' * 64},
             ],
         }
 
@@ -26,6 +27,8 @@ class UpdateTests(unittest.TestCase):
         self.assertIn('pkgver=4.30.0\npkgrel=1', result)
         self.assertIn("sha256sums_x86_64=('" + 'a' * 64 + "')", result)
         self.assertIn("sha256sums_aarch64=('" + 'b' * 64 + "')", result)
+        self.assertIn('releases/assets/430001', result)
+        self.assertIn('releases/assets/430002', result)
 
     def test_first_publication_needs_no_existing_aur_package(self):
         self.assertIn('pkgver=4.30.0\npkgrel=1', self.module.update(self.template, self.release, None))
@@ -55,7 +58,7 @@ class UpdateTests(unittest.TestCase):
         self.assertIn('pkgrel=7', result)
 
     def test_bumped_template_pkgrel_survives_new_upstream_version(self):
-        template = self.template.replace('pkgver=4.29.1\npkgrel=1', 'pkgver=4.29.1\npkgrel=3')
+        template = re.sub(r'pkgver=[^\n]+\npkgrel=1', 'pkgver=4.29.1\npkgrel=3', self.template)
         result = self.module.update(template, self.release, {'Version': '4.29.1-1'})
         self.assertIn('pkgrel=3', result)
 
@@ -85,6 +88,11 @@ class UpdateTests(unittest.TestCase):
         self.release['assets'][0]['digest'] = 'sha256:' + 'c' * 64
         with self.assertRaises(ValueError):
             self.module.verify_release(built, self.release)
+
+    def test_replaced_release_asset_id_invalidates_prepared_package(self):
+        built = self.module.update(self.template, self.release, None)
+        self.release['assets'][0]['id'] += 1
+        self.assertRaises(ValueError, self.module.verify_release, built, self.release)
 
     def test_verify_accepts_built_release(self):
         built = self.module.update(self.template, self.release, None)

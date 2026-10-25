@@ -73,15 +73,22 @@ git config --global user.email "$commit_email"
 echo '::endgroup::'
 
 echo '::group::Cloning AUR package into /tmp/local-repo'
-# Authenticated AUR cloning supports empty repositories for first publication.
-# Any clone failure is fatal: never infer package absence from a network error.
-git clone -v "ssh://aur@aur.archlinux.org/${pkgname}.git" /tmp/local-repo
-if ! git -C /tmp/local-repo rev-parse --verify HEAD >/dev/null 2>&1; then
+# Confirm absence through AUR's API before handling first publication. A clone
+# failure alone is never evidence of absence; transport errors fail closed.
+aur_info=$(curl --fail --silent --show-error --get \
+  --data-urlencode "arg[]=${pkgname}" https://aur.archlinux.org/rpc/v5/info)
+aur_count=$(jq -er '.resultcount' <<< "$aur_info")
+if [[ "$aur_count" == 0 ]]; then
   if [[ "$force_push" != false ]]; then
     echo 'First publication must not use force_push.' >&2
     exit 1
   fi
+  mkdir -p /tmp/local-repo
+  git -C /tmp/local-repo init
   git -C /tmp/local-repo checkout -B master
+else
+  [[ "$aur_count" == 1 ]] || { echo 'Unexpected AUR package response.' >&2; exit 1; }
+  git clone -v "ssh://aur@aur.archlinux.org/${pkgname}.git" /tmp/local-repo
 fi
 if [[ -n "$expected_revision_file" ]]; then
   expected_revision=$(cat "$expected_revision_file")

@@ -9,7 +9,7 @@ SCRIPT = Path(__file__).resolve().parents[1] / '.github/actions/deploy-aur/build
 
 
 class CloneTests(unittest.TestCase):
-    def run_clone(self, *, empty=True, fail=False, force=False, expected=None):
+    def run_clone(self, *, empty=True, fail=False, force=False, expected=None, api_count='1'):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             remote = root / 'remote.git'
@@ -43,6 +43,12 @@ echo 'POST_CLONE_GIT_COMMAND' >&2
 exec "$REAL_GIT" "$@"
 ''')
             shim.chmod(0o755)
+            curl_shim = root / 'curl'
+            curl_shim.write_text('#!/bin/sh\n[ "$SIMULATE_API_FAILURE" != true ] || exit 22\nprintf "%s\\n" "$AUR_COUNT_JSON"\n')
+            curl_shim.chmod(0o755)
+            jq_shim = root / 'jq'
+            jq_shim.write_text('#!/bin/sh\n[ "$AUR_COUNT" != not-json ] || exit 4\nprintf "%s\\n" "$AUR_COUNT"\n')
+            jq_shim.chmod(0o755)
             block = SCRIPT.read_text().split("echo '::group::Cloning AUR package into /tmp/local-repo'", 1)[1]
             block = block.split("echo '::group::Copying files into /tmp/local-repo'", 1)[0]
             target = root / 'checkout'
@@ -51,7 +57,9 @@ exec "$REAL_GIT" "$@"
             block = block.replace('/tmp/local-repo', str(target))
             env = {**os.environ, 'PATH': str(root) + os.pathsep + os.environ['PATH'],
                    'REAL_GIT': real_git, 'TEST_REMOTE': str(remote),
-                   'SIMULATE_FAILURE': str(fail).lower()}
+                   'SIMULATE_FAILURE': str(fail).lower(), 'AUR_COUNT': api_count,
+                   'SIMULATE_API_FAILURE': str(api_count == 'api-failure').lower(),
+                   'AUR_COUNT_JSON': '{"resultcount": ' + ('1' if api_count == 'api-failure' else api_count) + '}'}
             setup = '\n'.join(['set -euo pipefail', 'pkgname=test-package',
                                f"expected_revision_file='{revision_file if expected else ''}'",
                                f'force_push={str(force).lower()}', block])
@@ -62,11 +70,10 @@ exec "$REAL_GIT" "$@"
             return result, exists, branch
 
     def test_network_failure_aborts_without_initializing_repository(self):
-        result, exists, _ = self.run_clone(fail=True, force=True)
+        result, exists, _ = self.run_clone(fail=True, api_count='1')
         self.assertEqual(result.returncode, 128)
         self.assertIn('SIMULATED_CLONE_TRANSPORT_FAILURE', result.stderr)
         self.assertNotIn('POST_CLONE_GIT_COMMAND', result.stderr)
-        self.assertNotIn('First publication', result.stderr)
         self.assertFalse(exists, result.stdout + result.stderr)
 
     def test_authenticated_empty_repository_supports_first_publication(self):
@@ -76,7 +83,7 @@ exec "$REAL_GIT" "$@"
         self.assertEqual(branch, 'master')
 
     def test_first_publication_rejects_force_push(self):
-        result, _, _ = self.run_clone(force=True)
+        result, _, _ = self.run_clone(force=True, api_count='0')
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('force', result.stderr.lower())
 
@@ -92,8 +99,18 @@ exec "$REAL_GIT" "$@"
         self.assertIn('AUR changed after preparation', result.stderr)
 
     def test_confirmed_absence_matches_empty_namespace(self):
-        result, _, _ = self.run_clone(expected='absent')
+        result, _, _ = self.run_clone(expected='absent', api_count='0')
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_unconfirmed_clone_failure_is_not_treated_as_absence(self):
+        result, exists, _ = self.run_clone(fail=True, api_count='1')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(exists)
+
+    def test_api_failure_is_fail_closed(self):
+        result, exists, _ = self.run_clone(api_count='api-failure')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(exists)
 
 
 def section(start, end):
