@@ -13,13 +13,13 @@ options=('!strip' '!debug')
 # The license is pinned independently of release tags, which may not carry source.
 source=('AstrBot-LICENSE::https://raw.githubusercontent.com/AstrBotDevs/AstrBot-desktop/6cf79c322190299f0d83cb2f9001984655fcd88d/LICENSE')
 sha256sums=('0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0')
-source_x86_64=("AstrBot_${pkgver}_linux_amd64.deb::githubasset::https://api.github.com/repos/AstrBotDevs/AstrBot-desktop/releases/assets/672806591")
+source_x86_64=("AstrBot_${pkgver}_linux_amd64.deb::githubasset://api.github.com/repos/AstrBotDevs/AstrBot-desktop/releases/assets/672806591")
 sha256sums_x86_64=('460c39a4208d221cb43bb67f4d7fd2ff44eb2dc6bcd3919fe23dfa74d4c87713')
-source_aarch64=("AstrBot_${pkgver}_linux_arm64.deb::githubasset::https://api.github.com/repos/AstrBotDevs/AstrBot-desktop/releases/assets/672806592")
+source_aarch64=("AstrBot_${pkgver}_linux_arm64.deb::githubasset://api.github.com/repos/AstrBotDevs/AstrBot-desktop/releases/assets/672806592")
 sha256sums_aarch64=('fa1a2e27843e683da820210af00472c49ea358ae40ebe815705fd93e214c4b7b')
 noextract=("AstrBot_${pkgver}_linux_amd64.deb" "AstrBot_${pkgver}_linux_arm64.deb")
 # GitHub's asset API returns JSON unless the binary media type is requested.
-DLAGENTS+=('githubasset::/usr/bin/curl -fL --retry 3 --retry-all-errors -H "Accept: application/octet-stream" -H "X-GitHub-Api-Version: 2022-11-28" -o %o %u')
+DLAGENTS+=('githubasset::/usr/bin/curl -fL --retry 3 --retry-all-errors -H "Accept: application/octet-stream" -H "X-GitHub-Api-Version: 2022-11-28" -o %o "$(printf "%s" %u | sed "s#^githubasset://#https://#")"')
 
 package() {
   local debarch

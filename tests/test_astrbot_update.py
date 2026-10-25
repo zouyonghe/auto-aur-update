@@ -27,8 +27,8 @@ class UpdateTests(unittest.TestCase):
         self.assertIn('pkgver=4.30.0\npkgrel=1', result)
         self.assertIn("sha256sums_x86_64=('" + 'a' * 64 + "')", result)
         self.assertIn("sha256sums_aarch64=('" + 'b' * 64 + "')", result)
-        self.assertIn('releases/assets/430001', result)
-        self.assertIn('releases/assets/430002', result)
+        self.assertIn('::githubasset://api.github.com/repos/AstrBotDevs/AstrBot-desktop/releases/assets/430001', result)
+        self.assertIn('::githubasset://api.github.com/repos/AstrBotDevs/AstrBot-desktop/releases/assets/430002', result)
 
     def test_first_publication_needs_no_existing_aur_package(self):
         self.assertIn('pkgver=4.30.0\npkgrel=1', self.module.update(self.template, self.release, None))
