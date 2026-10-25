@@ -171,5 +171,60 @@ class DeploymentTests(unittest.TestCase):
             self.assertEqual((root / '.ssh/known_hosts').read_text(), '')
 
 
+class FinalPackageTests(unittest.TestCase):
+    def run_final_package(self, *, change='', bump=False):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            env = {**os.environ, 'GIT_AUTHOR_NAME': 'Test', 'GIT_COMMITTER_NAME': 'Test',
+                   'GIT_AUTHOR_EMAIL': 'test@example.org', 'GIT_COMMITTER_EMAIL': 'test@example.org'}
+            def git(*args):
+                return subprocess.check_output(['git', '-C', directory, *args], env=env, text=True)
+            git('init', '--initial-branch=master')
+            (root / 'PKGBUILD').write_text('pkgver=4.29.1\npkgrel=1\n')
+            metadata = 'pkgbase = test-package\n\tpkgver = 4.29.1\n\tpkgrel = 1\n'
+            (root / '.SRCINFO').write_text(metadata)
+            (root / 'helper.sh').write_text('original asset')
+            git('add', '.')
+            git('commit', '-qm', 'initial')
+            original = git('rev-parse', 'HEAD').strip()
+            if change == 'asset':
+                (root / 'helper.sh').write_text('changed asset')
+            elif change == 'deleted_asset':
+                (root / 'helper.sh').unlink()
+            elif change == 'post_process':
+                block = section("if [ -n \"$post_process\" ]; then",
+                                "echo '::group::Generating .SRCINFO'")
+                block = 'if [ -n \"$post_process\" ]; then' + block
+                block = block.replace('/tmp/local-repo/', directory + '/')
+                subprocess.run(['bash', '-c', block], cwd=directory, check=True,
+                               env={**env, 'post_process': 'echo changed >> PKGBUILD'}, capture_output=True)
+            if bump:
+                (root / '.SRCINFO').write_text(metadata.replace('pkgrel = 1', 'pkgrel = 2'))
+                (root / 'PKGBUILD').write_text('pkgver=4.29.1\npkgrel=2\n')
+            block = section("echo '::group::Committing files to the repository'",
+                            "echo '::group::Publishing the repository'")
+            result = subprocess.run(['bash', '-c', 'set -euo pipefail\nassets=helper.sh\nallow_empty_commits=false\ncommit_message=update\n' + block],
+                                    cwd=directory, env=env, text=True, capture_output=True)
+            return result, original == git('rev-parse', 'HEAD').strip()
+
+    def test_final_changes_require_version_bump(self):
+        for change in ('asset', 'deleted_asset', 'post_process'):
+            with self.subTest(change=change):
+                result, unchanged = self.run_final_package(change=change)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertTrue(unchanged)
+                self.assertIn('strictly higher', result.stderr)
+
+    def test_final_asset_change_with_bump_is_committed(self):
+        result, unchanged = self.run_final_package(change='asset', bump=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(unchanged)
+
+    def test_identical_package_does_not_need_bump(self):
+        result, unchanged = self.run_final_package()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(unchanged)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -138,11 +138,6 @@ if [ "$test" == "true" ]; then
   echo '::endgroup::'
 fi
 
-echo '::group::Generating .SRCINFO'
-cd /tmp/local-repo
-makepkg --printsrcinfo >.SRCINFO
-echo '::endgroup::'
-
 if [ -n "$post_process" ]; then
   echo '::group::Executing post process commands'
   cd /tmp/local-repo/
@@ -150,11 +145,36 @@ if [ -n "$post_process" ]; then
   echo '::endgroup::'
 fi
 
+echo '::group::Generating .SRCINFO'
+cd /tmp/local-repo
+# Generate metadata after post-processing so it describes the final PKGBUILD.
+makepkg --printsrcinfo >.SRCINFO
+echo '::endgroup::'
+
 echo '::group::Committing files to the repository'
 if [[ -z "$assets" ]]; then
   git add -fv PKGBUILD .SRCINFO
 else
   git add --all
+fi
+
+# Check the entire staged tree, including added/deleted assets and late changes.
+if git rev-parse --verify HEAD >/dev/null 2>&1 && ! git diff --cached --quiet HEAD; then
+  versions=()
+  for revision in HEAD ''; do
+    metadata=$(git show "${revision}:.SRCINFO")
+    version=$(printf '%s\n' "$metadata" | sed -n 's/^[[:space:]]*pkgver = //p')
+    release=$(printf '%s\n' "$metadata" | sed -n 's/^[[:space:]]*pkgrel = //p')
+    epoch=$(printf '%s\n' "$metadata" | sed -n 's/^[[:space:]]*epoch = //p')
+    [[ "$version" =~ ^[a-zA-Z0-9._+]+$ ]] || { echo 'Invalid final pkgver.' >&2; exit 1; }
+    [[ "$release" =~ ^[0-9]+([.][0-9]+)*$ ]] || { echo 'Invalid final pkgrel.' >&2; exit 1; }
+    [[ "${epoch:-0}" =~ ^[0-9]+$ ]] || { echo 'Invalid final epoch.' >&2; exit 1; }
+    versions+=("${epoch:-0}:${version}-${release}")
+  done
+  if (( $(vercmp "${versions[1]}" "${versions[0]}") <= 0 )); then
+    echo 'Final staged changes require a strictly higher package version or pkgrel.' >&2
+    exit 1
+  fi
 fi
 
 case "$allow_empty_commits" in
