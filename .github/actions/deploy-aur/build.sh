@@ -57,14 +57,15 @@ git config --global user.email "$commit_email"
 echo '::endgroup::'
 
 echo '::group::Cloning AUR package into /tmp/local-repo'
-if git clone -v "https://aur.archlinux.org/${pkgname}.git" /tmp/local-repo; then
-  echo 'Cloned existing AUR package.'
-else
-  echo 'AUR package does not exist yet; initializing first publication.'
-  rm -rf /tmp/local-repo
-  mkdir -p /tmp/local-repo
-  git -C /tmp/local-repo init
-  git -C /tmp/local-repo checkout -b master
+# Authenticated AUR cloning supports empty repositories for first publication.
+# Any clone failure is fatal: never infer package absence from a network error.
+git clone -v "ssh://aur@aur.archlinux.org/${pkgname}.git" /tmp/local-repo
+if ! git -C /tmp/local-repo rev-parse --verify HEAD >/dev/null 2>&1; then
+  if [[ "$force_push" != false ]]; then
+    echo 'First publication must not use force_push.' >&2
+    exit 1
+  fi
+  git -C /tmp/local-repo checkout -B master
 fi
 echo '::endgroup::'
 
