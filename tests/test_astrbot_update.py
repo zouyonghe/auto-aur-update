@@ -27,8 +27,8 @@ class UpdateTests(unittest.TestCase):
         self.assertIn('pkgver=4.30.0\npkgrel=1', result)
         self.assertIn("sha256sums_x86_64=('" + 'a' * 64 + "')", result)
         self.assertIn("sha256sums_aarch64=('" + 'b' * 64 + "')", result)
-        self.assertIn('::githubasset://api.github.com/repos/AstrBotDevs/AstrBot-desktop/releases/assets/430001', result)
-        self.assertIn('::githubasset://api.github.com/repos/AstrBotDevs/AstrBot-desktop/releases/assets/430002', result)
+        self.assertIn('releases/download/v${pkgver}/AstrBot_${pkgver}_linux_amd64.deb', result)
+        self.assertIn('releases/download/v${pkgver}/AstrBot_${pkgver}_linux_arm64.deb', result)
 
     def test_first_publication_needs_no_existing_aur_package(self):
         self.assertIn('pkgver=4.30.0\npkgrel=1', self.module.update(self.template, self.release, None))
@@ -88,11 +88,6 @@ class UpdateTests(unittest.TestCase):
         self.release['assets'][0]['digest'] = 'sha256:' + 'c' * 64
         with self.assertRaises(ValueError):
             self.module.verify_release(built, self.release)
-
-    def test_replaced_release_asset_id_invalidates_prepared_package(self):
-        built = self.module.update(self.template, self.release, None)
-        self.release['assets'][0]['id'] += 1
-        self.assertRaises(ValueError, self.module.verify_release, built, self.release)
 
     def test_verify_accepts_built_release(self):
         built = self.module.update(self.template, self.release, None)

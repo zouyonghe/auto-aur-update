@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Update the trusted AstrBot template using stable GitHub release metadata."""
 import json
+import hashlib
 import os
 from pathlib import Path
 import re
@@ -71,7 +72,7 @@ def update(template, release, current):
         api_url = f'https://api.github.com/repos/AstrBotDevs/AstrBot-desktop/releases/assets/{asset_id}'
         result, count = re.subn(
             rf'^source_{arch}=.*$',
-            f'source_{arch}=("AstrBot_${{pkgver}}_linux_{debarch}.deb::githubasset://{api_url.removeprefix("https://")}")',
+            f'source_{arch}=("AstrBot_${{pkgver}}_linux_{debarch}.deb::${{url}}/releases/download/v${{pkgver}}/AstrBot_${{pkgver}}_linux_{debarch}.deb")',
             result,
             flags=re.M,
         )
@@ -134,6 +135,22 @@ def verify_release(package, release):
         raise ValueError('Stable release changed after build; rerun preparation')
 
 
+def verify_release_assets(package, release):
+    """Download current release URLs and verify bytes immediately before push."""
+    verify_release(package, release)
+    for arch, debarch in [('x86_64', 'amd64'), ('aarch64', 'arm64')]:
+        expected = re.search(rf'^sha256sums_{arch}=\(\'([0-9a-f]+)\'\)$', package, re.M)[1]
+        asset = next(a for a in release['assets'] if a['name'] == f'AstrBot_{release["tag_name"][1:]}_linux_{debarch}.deb')
+        request = urllib.request.Request(asset['browser_download_url'], headers={'User-Agent': 'astrbot-aur-update'})
+        digest = hashlib.sha256()
+        with urllib.request.urlopen(request, timeout=180) as response:
+            while chunk := response.read(1024 * 1024):
+                digest.update(chunk)
+        digest = digest.hexdigest()
+        if digest != expected:
+            raise ValueError('Release asset changed during final verification')
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--verify', action='store_true')
@@ -142,7 +159,7 @@ if __name__ == '__main__':
     release = read_json('https://api.github.com/repos/AstrBotDevs/AstrBot-desktop/releases/latest', os.environ.get('GH_TOKEN'))
     package = args.package
     if args.verify:
-        verify_release(package.read_text(), release)
+        verify_release_assets(package.read_text(), release)
     else:
         current = read_current()
         package.write_text(update(package.read_text(), release, current))
