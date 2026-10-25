@@ -22,7 +22,10 @@ concurrency:
 jobs:
   prepare:
     runs-on: ubuntu-latest
+    container: archlinux:base-devel
     steps:
+      - name: Install test tools
+        run: pacman -Syu --noconfirm --needed git python openssh
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Test updater
         run: python3 -m unittest discover -s tests -v
@@ -33,7 +36,9 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: astrbot-pkgbuild
-          path: astrbot-desktop-bin/PKGBUILD
+          path: |
+            astrbot-desktop-bin/PKGBUILD
+            astrbot-desktop-bin/aur-revision
           if-no-files-found: error
 
   build:
@@ -73,11 +78,16 @@ jobs:
         with:
           name: astrbot-pkgbuild
           path: astrbot-desktop-bin
+      - name: Recheck stable version and asset digests before publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/astrbot-desktop-bin.py --verify
       - name: Publish AUR metadata
         uses: ./.github/actions/deploy-aur
         with:
           pkgname: astrbot-desktop-bin
           pkgbuild: astrbot-desktop-bin/PKGBUILD
+          expected_revision_file: astrbot-desktop-bin/aur-revision
           commit_username: ${{ secrets.AUR_USERNAME }}
           commit_email: ${{ secrets.AUR_EMAIL }}
           ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}

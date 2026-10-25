@@ -1,6 +1,7 @@
 import importlib.util
 from pathlib import Path
 import unittest
+from unittest import mock
 
 SCRIPT = Path(__file__).resolve().parents[1] / 'scripts/astrbot-desktop-bin.py'
 
@@ -61,6 +62,33 @@ class UpdateTests(unittest.TestCase):
     def test_rejects_downgrade(self):
         with self.assertRaises(ValueError):
             self.module.update(self.template, self.release, {'Version': '4.31.0-1'})
+
+    def test_new_version_does_not_inherit_old_checksum_revision(self):
+        current = {'Version': '4.29.1-7',
+                   'Checksums': {'x86_64': 'c' * 64, 'aarch64': 'd' * 64}}
+        result = self.module.update(self.template, self.release, current)
+        self.assertIn('pkgver=4.30.0\npkgrel=1', result)
+
+    def test_existing_package_requires_srcinfo(self):
+        with mock.patch.object(self.module, 'read_json', return_value={
+                'type': 'multiinfo', 'results': [{'Version': '4.29.1-1'}]}), \
+                mock.patch.object(self.module.subprocess, 'check_output', return_value=''), \
+                self.assertRaises(ValueError):
+            self.module.read_current()
+
+    def test_verify_rejects_newer_stable_release(self):
+        with self.assertRaises(ValueError):
+            self.module.verify_release(self.template, self.release)
+
+    def test_verify_rejects_replaced_release_asset(self):
+        built = self.module.update(self.template, self.release, None)
+        self.release['assets'][0]['digest'] = 'sha256:' + 'c' * 64
+        with self.assertRaises(ValueError):
+            self.module.verify_release(built, self.release)
+
+    def test_verify_accepts_built_release(self):
+        built = self.module.update(self.template, self.release, None)
+        self.module.verify_release(built, self.release)
 
     def test_rejects_missing_asset_invalid_checksum_and_nonstable_release(self):
         for change in ('asset', 'checksum', 'prerelease', 'tag', 'draft'):

@@ -4,6 +4,9 @@ import json
 import os
 from pathlib import Path
 import re
+import argparse
+import subprocess
+import tempfile
 import urllib.request
 
 
@@ -51,10 +54,10 @@ def update(template, release, current):
         result, count = re.subn(rf'^sha256sums_{arch}=.*$', f"sha256sums_{arch}=('{checksum}')", result, flags=re.M)
         if count != 1:
             raise ValueError(f'Missing checksum field for {arch}')
-    if current and current_pkgrel and current.get('Checksums'):
+    if current and current['Version'].rsplit('-', 1)[0] == version and current.get('Checksums'):
         if any(current['Checksums'].get(arch) != checksum for arch, checksum in checksums.items()):
             pkgrel = max_pkgrel(pkgrel, current_pkgrel)
-            # Numeric pkgrels use their next integer revision after a replacement.
+            # Advance the final numeric revision component after a replacement.
             parts = list(pkgrel_parts(pkgrel))
             parts[-1] += 1
             result = re.sub(r'^pkgrel=.*$', f"pkgrel={'.'.join(map(str, parts))}", result, flags=re.M)
@@ -69,27 +72,49 @@ def read_json(url, token=None):
         return json.load(response)
 
 
-if __name__ == '__main__':
-    release = read_json('https://api.github.com/repos/AstrBotDevs/AstrBot-desktop/releases/latest', os.environ.get('GH_TOKEN'))
+def read_current():
     aur = read_json('https://aur.archlinux.org/rpc/v5/info?arg[]=astrbot-desktop-bin')
     if aur.get('type') != 'multiinfo' or len(aur['results']) > 1:
         raise ValueError('Unexpected AUR metadata response')
     current = next(iter(aur['results']), None)
-    if current:
-        try:
-            with urllib.request.urlopen(
-                'https://aur.archlinux.org/cgit/aur.git/plain/.SRCINFO?h=astrbot-desktop-bin',
-                timeout=60,
-            ) as response:
-                srcinfo = response.read().decode()
-            current['Checksums'] = {
-                arch: next((line.split('=', 1)[1].strip() for line in srcinfo.splitlines()
-                            if line.strip().startswith(f'sha256sums_{arch} = ')), None)
-                for arch in ('x86_64', 'aarch64')
-            }
-        except urllib.error.HTTPError as error:
-            if error.code != 404:
-                raise
+    if not current:
+        return None
+    # Read metadata and revision from one Git snapshot, without sourcing PKGBUILD.
+    with tempfile.TemporaryDirectory() as directory:
+        subprocess.check_output(['git', 'clone', '--quiet', '--depth=1',
+                                 'https://aur.archlinux.org/astrbot-desktop-bin.git', directory], timeout=60)
+        revision = subprocess.check_output(['git', '-C', directory, 'rev-parse', 'HEAD'], text=True, timeout=30).strip()
+        srcinfo = subprocess.check_output(['git', '-C', directory, 'show', 'HEAD:.SRCINFO'], text=True, timeout=30)
+    def field(name):
+        values = re.findall(rf'^\s*{name} = (.+)$', srcinfo, re.M)
+        if len(values) != 1:
+            raise ValueError(f'Missing or ambiguous AUR {name}')
+        return values[0]
+    if f"{field('pkgver')}-{field('pkgrel')}" != current['Version']:
+        raise ValueError('AUR RPC and Git versions differ; retry later')
+    current['Checksums'] = {arch: field(f'sha256sums_{arch}') for arch in ('x86_64', 'aarch64')}
+    if not all(re.fullmatch(r'[0-9a-f]{64}', checksum) for checksum in current['Checksums'].values()):
+        raise ValueError('Invalid AUR checksum metadata')
+    current['Revision'] = revision
+    return current
+
+
+def verify_release(package, release):
+    # A second update must not change the built version or either payload digest.
+    if update(package, release, None) != package:
+        raise ValueError('Stable release changed after build; rerun preparation')
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--verify', action='store_true')
+    args = parser.parse_args()
+    release = read_json('https://api.github.com/repos/AstrBotDevs/AstrBot-desktop/releases/latest', os.environ.get('GH_TOKEN'))
     package = Path(__file__).resolve().parents[1] / 'astrbot-desktop-bin/PKGBUILD'
-    package.write_text(update(package.read_text(), release, current))
-    print(f"Prepared astrbot-desktop-bin for {release['tag_name']}")
+    if args.verify:
+        verify_release(package.read_text(), release)
+    else:
+        current = read_current()
+        package.write_text(update(package.read_text(), release, current))
+        package.with_name('aur-revision').write_text(current['Revision'] if current else 'absent')
+    print(f"Validated astrbot-desktop-bin for {release['tag_name']}")

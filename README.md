@@ -14,6 +14,15 @@ Update the program in aur warehouse automatically
 - PRs run tests and both repackaging builds without AUR credentials. Only
   scheduled/manual runs on `main` publish using the existing `AUR_USERNAME`,
   `AUR_EMAIL`, and `AUR_SSH_PRIVATE_KEY` secrets. No binaries are pushed to AUR.
+- Preparation records the AUR Git commit alongside the generated PKGBUILD.
+  Deployment aborts if that snapshot changed; it never rebases stale packaging
+  over another maintainer's update. Rerun the workflow to prepare fresh inputs.
+- Deployment rechecks the latest stable version and asset digests. A new release
+  or replaced asset invalidates the build and requires rerunning the workflow.
+- Existing AUR packages require coherent RPC and Git `.SRCINFO` metadata. Missing
+  metadata fails closed. New upstream versions do not inherit old checksum revisions.
+- SSH host fingerprints are pinned to those published on the AUR homepage.
+  Host-key rotation requires an explicit reviewed update, not blind keyscan trust.
 - The configured AUR account must own/co-maintain an existing package, or be
   allowed to create this new package. The AUR repository is currently new.
 - The upstream AGPL license is pinned to a source commit; bundled third-party
