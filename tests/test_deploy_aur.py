@@ -5,6 +5,9 @@ import subprocess
 import tempfile
 import unittest
 
+WORKFLOW = Path(__file__).resolve().parents[1] / '.github/workflows/astrbot-desktop-bin.yml'
+PUBLISH_WORKFLOW = Path(__file__).resolve().parents[1] / '.github/workflows/publish-astrbot-desktop-bin.yml'
+
 SCRIPT = Path(__file__).resolve().parents[1] / '.github/actions/deploy-aur/build.sh'
 
 
@@ -47,7 +50,7 @@ exec "$REAL_GIT" "$@"
             curl_shim.write_text('#!/bin/sh\n[ "$SIMULATE_API_FAILURE" != true ] || exit 22\nprintf "%s\\n" "$AUR_COUNT_JSON"\n')
             curl_shim.chmod(0o755)
             jq_shim = root / 'jq'
-            jq_shim.write_text('''#!/bin/sh
+            jq_shim.write_text('''#!/bin/bash
 set -eu
 if [[ "$*" == *'.type'* ]]; then
   [[ "$AUR_COUNT" != rpc-error ]] || { echo error; exit 0; }
@@ -78,6 +81,15 @@ fi
             branch = subprocess.run([real_git, '-C', str(target), 'symbolic-ref', '--short', 'HEAD'],
                                     text=True, capture_output=True).stdout.strip() if exists else None
             return result, exists, branch
+
+    def test_pull_request_workflow_contains_no_publish_secrets(self):
+        self.assertNotIn('secrets.AUR_', WORKFLOW.read_text())
+        self.assertNotIn('uses: ./.github/actions/deploy-aur', WORKFLOW.read_text())
+
+    def test_publish_workflow_is_main_only(self):
+        text = PUBLISH_WORKFLOW.read_text()
+        self.assertIn("if: github.ref == 'refs/heads/main'", text)
+        self.assertIn('secrets.AUR_SSH_PRIVATE_KEY', text)
 
     def test_network_failure_aborts_without_initializing_repository(self):
         result, exists, _ = self.run_clone(fail=True, api_count='1')

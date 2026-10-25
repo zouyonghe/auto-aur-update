@@ -1,9 +1,6 @@
 name: Update AstrBot AUR package
 
 on:
-  schedule:
-    - cron: '45 3 * * *'
-  workflow_dispatch:
   pull_request:
     paths:
       - 'astrbot-desktop-bin/**'
@@ -67,32 +64,3 @@ jobs:
           cd package
           # ARM payload is repacked, not executed, on this x86_64 runner.
           runuser -u builder -- makepkg --config /tmp/astrbot-makepkg.conf --ignorearch --cleanbuild --clean --noconfirm
-
-  publish:
-    needs: [prepare, build]
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: astrbot-pkgbuild
-          path: astrbot-desktop-bin
-      - name: Recheck stable version and asset digests before publication
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: python3 scripts/astrbot-desktop-bin.py --verify
-      - name: Publish AUR metadata
-        uses: ./.github/actions/deploy-aur
-        env:
-          GH_TOKEN: ${{ github.token }}
-        with:
-          release_verifier: scripts/astrbot-desktop-bin.py
-          pkgname: astrbot-desktop-bin
-          pkgbuild: astrbot-desktop-bin/PKGBUILD
-          expected_revision_file: astrbot-desktop-bin/aur-revision
-          commit_username: ${{ secrets.AUR_USERNAME }}
-          commit_email: ${{ secrets.AUR_EMAIL }}
-          ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
-          commit_message: Update astrbot-desktop-bin
-          allow_empty_commits: false
