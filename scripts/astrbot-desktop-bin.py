@@ -71,7 +71,7 @@ def update(template, release, current):
         api_url = f'https://api.github.com/repos/AstrBotDevs/AstrBot-desktop/releases/assets/{asset_id}'
         result, count = re.subn(
             rf'^source_{arch}=.*$',
-            f'source_{arch}=("AstrBot_${{pkgver}}_linux_{debarch}.deb::{api_url}")',
+            f'source_{arch}=("AstrBot_${{pkgver}}_linux_{debarch}.deb::githubasset::{api_url}")',
             result,
             flags=re.M,
         )
