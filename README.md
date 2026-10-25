@@ -22,6 +22,10 @@ Update the program in aur warehouse automatically
   or replaced asset invalidates the build and requires rerunning the workflow.
   It rechecks the committed PKGBUILD again immediately before Git push; GitHub
   and AUR cannot be updated atomically, so a small check-to-push window remains.
+  GitHub release download URLs are mutable; standard AUR `makepkg` cannot use
+  GitHub's authenticated asset-ID API endpoint. Final verification downloads
+  both assets and hashes their bytes immediately before push, but this cannot
+  prevent an upstream replacement in the remaining check-to-push window.
 - Existing AUR epochs are retained; explicit template epoch increases permit
   version resets. Preflight and final staged comparisons include epoch.
 - Existing AUR packages require coherent RPC and Git `.SRCINFO` metadata. Missing
