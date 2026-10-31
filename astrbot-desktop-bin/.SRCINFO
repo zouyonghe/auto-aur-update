@@ -1,0 +1,27 @@
+pkgbase = astrbot-desktop-bin
+	pkgdesc = AstrBot desktop application (official prebuilt binaries)
+	pkgver = 4.29.3
+	pkgrel = 1
+	url = https://github.com/AstrBotDevs/AstrBot-desktop
+	arch = x86_64
+	arch = aarch64
+	license = AGPL-3.0-only
+	depends = gtk3
+	depends = webkit2gtk-4.1
+	depends = libayatana-appindicator
+	depends = gcc-libs
+	depends = glibc
+	provides = astrbot-desktop
+	conflicts = astrbot-desktop
+	noextract = AstrBot_4.29.3_linux_amd64.deb
+	noextract = AstrBot_4.29.3_linux_arm64.deb
+	options = !strip
+	options = !debug
+	source = AstrBot-LICENSE::https://raw.githubusercontent.com/AstrBotDevs/AstrBot-desktop/6cf79c322190299f0d83cb2f9001984655fcd88d/LICENSE
+	sha256sums = 0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0
+	source_x86_64 = AstrBot_4.29.3_linux_amd64.deb::https://github.com/AstrBotDevs/AstrBot-desktop/releases/download/v4.29.3/AstrBot_4.29.3_linux_amd64.deb
+	sha256sums_x86_64 = 460c39a4208d221cb43bb67f4d7fd2ff44eb2dc6bcd3919fe23dfa74d4c87713
+	source_aarch64 = AstrBot_4.29.3_linux_arm64.deb::https://github.com/AstrBotDevs/AstrBot-desktop/releases/download/v4.29.3/AstrBot_4.29.3_linux_arm64.deb
+	sha256sums_aarch64 = fa1a2e27843e683da820210af00472c49ea358ae40ebe815705fd93e214c4b7b
+
+pkgname = astrbot-desktop-bin

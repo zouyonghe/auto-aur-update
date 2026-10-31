@@ -1,0 +1,96 @@
+name: Publish AstrBot AUR package
+
+on:
+  schedule:
+    - cron: '45 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: astrbot-aur-publish
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    steps:
+      - name: Install test tools
+        run: pacman -Syu --noconfirm --needed git python openssh
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: main
+      - name: Test updater
+        run: python3 -m unittest discover -s tests -v
+      - name: Update stable release metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/astrbot-desktop-bin.py
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: astrbot-pkgbuild
+          path: |
+            astrbot-desktop-bin/PKGBUILD
+            astrbot-desktop-bin/aur-revision
+          if-no-files-found: error
+
+  build:
+    needs: prepare
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x86_64, aarch64]
+    steps:
+      - name: Install build and runtime dependencies
+        run: pacman -Syu --noconfirm --needed git gtk3 webkit2gtk-4.1 libayatana-appindicator
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: astrbot-pkgbuild
+          path: package
+      - name: Validate and build binary package
+        env:
+          PACKAGE_ARCH: ${{ matrix.arch }}
+        run: |
+          useradd --create-home builder
+          chown -R builder:builder package
+          cp /etc/makepkg.conf /tmp/astrbot-makepkg.conf
+          sed -i "s/^CARCH=.*/CARCH=$PACKAGE_ARCH/" /tmp/astrbot-makepkg.conf
+          cd package
+          runuser -u builder -- makepkg --config /tmp/astrbot-makepkg.conf --ignorearch --cleanbuild --clean --noconfirm
+
+  publish:
+    needs: [prepare, build]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: main
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: astrbot-pkgbuild
+          path: astrbot-desktop-bin
+      - name: Recheck stable version and asset bytes before publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/astrbot-desktop-bin.py --verify
+      - name: Publish AUR metadata
+        uses: ./.github/actions/deploy-aur
+        env:
+          GH_TOKEN: ${{ github.token }}
+        with:
+          release_verifier: scripts/astrbot-desktop-bin.py
+          pkgname: astrbot-desktop-bin
+          pkgbuild: astrbot-desktop-bin/PKGBUILD
+          expected_revision_file: astrbot-desktop-bin/aur-revision
+          commit_username: ${{ secrets.AUR_USERNAME }}
+          commit_email: ${{ secrets.AUR_EMAIL }}
+          ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          commit_message: Update astrbot-desktop-bin
+          allow_empty_commits: false

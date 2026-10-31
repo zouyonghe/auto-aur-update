@@ -5,6 +5,10 @@ branding:
   color: blue
   icon: package
 inputs:
+  release_verifier:
+    description: 'Optional trusted Python verifier, run against committed PKGBUILD immediately before push'
+    required: false
+    default: ''
   pkgname:
     description: 'AUR package name'
     required: true
@@ -13,6 +17,10 @@ inputs:
     required: true
   assets:
     description: 'Newline-separated glob patterns for additional files to be added to the AUR repository'
+    required: false
+    default: ''
+  expected_revision_file:
+    description: 'Optional file with the prepared AUR commit, or absent for first publication; abort if changed'
     required: false
     default: ''
   updpkgsums:

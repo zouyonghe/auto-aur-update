@@ -1,3 +1,7 @@
 Host aur.archlinux.org
   IdentityFile ~/.ssh/aur
   User aur
+  StrictHostKeyChecking yes
+  UserKnownHostsFile /home/builder/.ssh/known_hosts
+  GlobalKnownHostsFile /dev/null
+  IdentitiesOnly yes
