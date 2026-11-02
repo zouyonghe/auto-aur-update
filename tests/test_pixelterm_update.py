@@ -11,7 +11,7 @@ SCRIPT = ROOT / 'scripts/pixelterm-c.sh'
 
 
 class PixelTermUpdateTests(unittest.TestCase):
-    def run_update(self, current_rel, *, template_rel='1', rebuild=False,
+    def run_update(self, current_rel, *, template_rel='1',
                    latest_version='1.8.2', expect_success=True):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -93,7 +93,6 @@ exec /usr/bin/sed "$@"
                 'CURRENT_VERSION': '1.8.2',
                 'CURRENT_RELEASE': str(current_rel),
                 'LATEST_VERSION': latest_version,
-                'REBUILD_CURRENT': 'true' if rebuild else 'false',
             }
             result = subprocess.run(
                 ['bash', str(scripts_dir / SCRIPT.name)],
@@ -111,34 +110,23 @@ exec /usr/bin/sed "$@"
             metadata = (package_dir / '.SRCINFO').read_text()
             return package, metadata
 
-    def test_requested_rebuild_increments_current_pkgrel(self):
-        cases = (
-            ('1', '2'),
-            ('2', '3'),
-            ('8', '9'),
-            ('9', '10'),
-            ('0008', '9'),
-            ('0009', '10'),
-            ('9223372036854775808', '9223372036854775809'),
-        )
-        for current_rel, expected in cases:
-            with self.subTest(current_rel=current_rel):
-                package, metadata = self.run_update(current_rel, rebuild=True)
-                self.assertIn(f'pkgrel={expected}', package)
-                self.assertIn(f'pkgrel = {expected}', metadata)
-
     def test_regular_same_version_update_preserves_pkgrel(self):
         package, metadata = self.run_update('8')
         self.assertIn('pkgrel=8', package)
         self.assertIn('pkgrel = 8', metadata)
 
-    def test_requested_rebuild_increments_higher_template_pkgrel(self):
-        package, metadata = self.run_update('2', template_rel='8', rebuild=True)
-        self.assertIn('pkgrel=9', package)
-        self.assertIn('pkgrel = 9', metadata)
+    def test_same_version_update_publishes_explicit_higher_template_pkgrel(self):
+        package, metadata = self.run_update('2', template_rel='8')
+        self.assertIn('pkgrel=8', package)
+        self.assertIn('pkgrel = 8', metadata)
+
+    def test_same_version_update_does_not_lower_higher_aur_pkgrel(self):
+        package, metadata = self.run_update('8', template_rel='3')
+        self.assertIn('pkgrel=8', package)
+        self.assertIn('pkgrel = 8', metadata)
 
     def test_new_upstream_version_starts_at_pkgrel_one(self):
-        package, metadata = self.run_update('8', rebuild=True, latest_version='1.9.0')
+        package, metadata = self.run_update('8', template_rel='12', latest_version='1.9.0')
         self.assertIn('pkgver=1.9.0', package)
         self.assertIn('pkgrel=1', package)
         self.assertIn('pkgrel = 1', metadata)

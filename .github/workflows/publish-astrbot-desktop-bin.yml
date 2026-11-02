@@ -13,19 +13,16 @@ permissions:
 
 jobs:
   prepare:
-    if: >-
-      github.ref == 'refs/heads/main' &&
-      (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    if: github.ref == 'refs/heads/main'
     uses: ./.github/workflows/build-astrbot-desktop-bin.yml
     with:
       source_sha: ${{ inputs.source_sha }}
 
   publish:
     needs: prepare
-    if: >-
-      github.ref == 'refs/heads/main' &&
-      (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:

@@ -1,0 +1,44 @@
+name: Sync repository task
+
+on:
+  watch:
+    types: [started]
+  schedule:
+    - cron: "30 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: auto-aur-update-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'watch' &&
+        github.event.repository.owner.id == github.event.sender.id) ||
+       (github.event_name == 'schedule' && github.event.schedule == '30 2 * * *'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Make Time log
+        run: |
+          echo "$(date +'%Y-%m-%d %H:%M:%S') begin" > time.log
+      - name: Commit refresh token changes
+        run: |
+          git config --local user.email 1259085392z@gmail.com
+          git config --local user.name buding
+          git add time.log
+          git commit -m "update new time.log" || echo "No changes to commit"
+      - name: Pull before push
+        run: git pull --rebase origin main
+      - name: Push changes
+        run: git push origin HEAD:main

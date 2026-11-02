@@ -9,7 +9,10 @@ import unittest
 WORKFLOW = Path(__file__).resolve().parents[1] / '.github/workflows/astrbot-desktop-bin.yml'
 PUBLISH_WORKFLOW = Path(__file__).resolve().parents[1] / '.github/workflows/publish-astrbot-desktop-bin.yml'
 BUILD_WORKFLOW = Path(__file__).resolve().parents[1] / '.github/workflows/build-astrbot-desktop-bin.yml'
-AUTO_UPDATE_WORKFLOW = Path(__file__).resolve().parents[1] / '.github/workflows/main.yml'
+ROOT = Path(__file__).resolve().parents[1]
+PIXELTERM_WORKFLOW = ROOT / '.github/workflows/pixelterm-update.yml'
+ASTRBOT_UPDATE_WORKFLOW = ROOT / '.github/workflows/astrbot-update.yml'
+TASK_WORKFLOW = ROOT / '.github/workflows/task-sync.yml'
 
 SCRIPT = Path(__file__).resolve().parents[1] / '.github/actions/deploy-aur/build.sh'
 SSH_CONFIG = Path(__file__).resolve().parents[1] / '.github/actions/deploy-aur/ssh_config'
@@ -40,39 +43,11 @@ def workflow_schedule_crons(text):
     return re.findall(r'(?m)^    - cron: "([^"]+)"$', schedule_match.group(1))
 
 
-def workflow_job_concurrency(job, name):
-    match = re.search(r'(?m)^    concurrency:\n((?:^      .*\n)+)', job)
+def workflow_concurrency(text):
+    match = re.search(r'(?m)^concurrency:\n((?:^  .*\n)+)', text)
     if match is None:
-        raise AssertionError(f'Missing concurrency block for workflow job: {name}')
+        raise AssertionError('Missing workflow concurrency block')
     return ' '.join(match.group(1).split())
-
-
-def workflow_step(job, name):
-    match = re.search(
-        rf'(?ms)^      - name: {re.escape(name)}\n(.*?)(?=^      - |\Z)', job)
-    if match is None:
-        raise AssertionError(f'Missing workflow step: {name}')
-    return match.group(1)
-
-
-def workflow_step_run(step, name):
-    match = re.search(r'(?m)^        run: (\||.+)$', step)
-    if match is None:
-        raise AssertionError(f'Missing run command for workflow step: {name}')
-    if match.group(1) != '|':
-        return match.group(1)
-
-    lines = step[match.end():].splitlines()
-    script = []
-    for line in lines:
-        if line and not line.startswith('          '):
-            break
-        script.append(line[10:] if line else '')
-    return '\n'.join(script)
-
-
-def git_output(*args, cwd, env=None):
-    return subprocess.check_output(['git', *args], cwd=cwd, env=env, text=True).strip()
 
 
 class CloneTests(unittest.TestCase):
@@ -169,35 +144,23 @@ fi
             with self.subTest(job=name):
                 self.assertIn("github.ref == 'refs/heads/main'", body)
 
-    def test_pr_validation_covers_publish_and_shared_workflows(self):
+    def test_pr_validation_covers_publish_and_split_workflows(self):
         text = WORKFLOW.read_text()
         self.assertIn("      - 'scripts/pixelterm-c.sh'", text)
-        self.assertIn("      - '.github/workflows/main.yml'", text)
+        self.assertIn("      - '.github/workflows/pixelterm-update.yml'", text)
+        self.assertIn("      - '.github/workflows/astrbot-update.yml'", text)
+        self.assertIn("      - '.github/workflows/task-sync.yml'", text)
         self.assertIn("      - '.github/workflows/publish-astrbot-desktop-bin.yml'", text)
         self.assertIn("      - '.github/workflows/build-astrbot-desktop-bin.yml'", text)
+        self.assertNotIn("      - '.github/workflows/main.yml'", text)
 
-    def test_main_workflow_unifies_package_updates_and_general_sync(self):
-        main = AUTO_UPDATE_WORKFLOW.read_text()
+    def test_split_workflows_keep_triggers_and_publication_independent(self):
+        self.assertFalse((ROOT / '.github/workflows/main.yml').exists())
+        pixelterm = PIXELTERM_WORKFLOW.read_text()
+        astrbot_update = ASTRBOT_UPDATE_WORKFLOW.read_text()
+        task = TASK_WORKFLOW.read_text()
         publish = PUBLISH_WORKFLOW.read_text()
-        validation = WORKFLOW.read_text()
-        rebuild_queue = workflow_job(main, 'QueuePixelTermRebuild')
-        pixelterm = workflow_job(main, 'UpdatePkg')
-        astrbot = workflow_job(main, 'UpdateAstrBot')
-        task = workflow_job(main, 'Task')
-        self.assertIn('workflow_dispatch:', main)
-        self.assertEqual(workflow_schedule_crons(main), ['30 2 * * *', '45 3 * * *'])
-        queue_condition = (
-            "github.ref == 'refs/heads/main' && "
-            "github.event_name == 'workflow_dispatch' && inputs.rebuild_current == true"
-        )
         pixelterm_condition = (
-            "!cancelled() && (needs.QueuePixelTermRebuild.result == 'success' || "
-            "needs.QueuePixelTermRebuild.result == 'skipped') && github.ref == 'refs/heads/main' && "
-            "(github.event_name == 'workflow_dispatch' || "
-            "(github.event_name == 'watch' && github.event.repository.owner.id == github.event.sender.id) || "
-            "(github.event_name == 'schedule' && github.event.schedule == '30 2 * * *'))"
-        )
-        task_condition = (
             "github.ref == 'refs/heads/main' && "
             "(github.event_name == 'workflow_dispatch' || "
             "(github.event_name == 'watch' && github.event.repository.owner.id == github.event.sender.id) || "
@@ -208,235 +171,33 @@ fi
             "(github.event_name == 'workflow_dispatch' || "
             "(github.event_name == 'schedule' && github.event.schedule == '45 3 * * *'))"
         )
-        self.assertEqual(workflow_job_condition(rebuild_queue, 'QueuePixelTermRebuild'), queue_condition)
-        self.assertNotRegex(rebuild_queue, r'(?m)^        if:')
-        self.assertEqual(workflow_job_condition(pixelterm, 'UpdatePkg'), pixelterm_condition)
-        self.assertEqual(workflow_job_condition(astrbot, 'UpdateAstrBot'), astrbot_condition)
-        self.assertEqual(workflow_job_condition(task, 'Task'), task_condition)
-        self.assertNotIn('\nconcurrency:\n  group: auto-aur-update\n', main)
-        concurrency = re.search(
-            r'(?m)^    concurrency:\n      group: (.+)\n      cancel-in-progress: false$',
-            pixelterm,
-        )
-        self.assertIsNotNone(concurrency)
-        self.assertEqual(concurrency.group(1), 'auto-aur-update-pixelterm-${{ matrix.PKGBUILDs }}')
-        self.assertIn('REQUEST_ID: ${{ github.run_id }}', rebuild_queue)
-        self.assertIn('REQUEST_ATTEMPT: ${{ github.run_attempt }}', rebuild_queue)
-        self.assertIn('HEAD:refs/heads/aur-update-queue/pixelterm-rebuild-${REQUEST_ID}-${REQUEST_ATTEMPT}', rebuild_queue)
-        self.assertIn('timeout --signal=TERM 60s git push origin "HEAD:refs/heads/aur-update-queue/', rebuild_queue)
-        self.assertIn('needs: QueuePixelTermRebuild', pixelterm)
-        self.assertIn("needs.QueuePixelTermRebuild.result == 'success'", pixelterm)
-        self.assertIn('group: auto-aur-update-pixelterm-${{ matrix.PKGBUILDs }}', pixelterm)
-        self.assertIn("git ls-remote --heads origin 'refs/heads/aur-update-queue/pixelterm-rebuild-*'", pixelterm)
-        self.assertIn("timeout --signal=TERM 30s git ls-remote --heads origin 'refs/heads/aur-update-queue/pixelterm-rebuild-*'", pixelterm)
-        self.assertIn('timeout --signal=TERM 60s git clone --quiet "$aur_url" "$aur_dir/package"', pixelterm)
-        self.assertIn('timeout --signal=TERM 30s git -C "$aur_dir/package" log --all --format=%B', pixelterm)
-        self.assertIn("awk '/^PixelTerm-Rebuild-Requests:$/", pixelterm)
-        self.assertIn('rebuild_current: ${{ steps.rebuild_queue.outputs.rebuild_needed == \'true\' && \'true\' || \'false\' }}', pixelterm)
-        self.assertIn('PixelTerm-Rebuild-Requests:', pixelterm)
-        self.assertIn("grep -Fqx -- \"$request_ref\" <<< \"$published_request_refs\"", pixelterm)
-        self.assertIn("git ls-remote --heads origin \"$request_ref\"", pixelterm)
-        self.assertIn('REQUEST_REFS: ${{ steps.rebuild_queue.outputs.refs }}', pixelterm)
-        self.assertIn('git push origin ":$request_ref"', pixelterm)
-        self.assertIn('timeout --signal=TERM 60s git push origin ":$request_ref"', pixelterm)
-        self.assertIn('for attempt in 1 2 3', pixelterm)
-        publish_step = workflow_step(pixelterm, 'Publish AUR package')
-        acknowledge_step = workflow_step(pixelterm, 'Acknowledge published PixelTerm rebuild requests')
-        self.assertLess(pixelterm.index(publish_step), pixelterm.index(acknowledge_step))
-        self.assertIn("if: steps.rebuild_queue.outputs.pending == 'true'", acknowledge_step)
-        self.assertNotRegex(acknowledge_step, r'(?m)^        if:.*(?:always|failure|cancelled)\(')
-        self.assertEqual(workflow_job_concurrency(astrbot, 'UpdateAstrBot'),
+        self.assertEqual(workflow_schedule_crons(pixelterm), ['30 2 * * *'])
+        self.assertEqual(workflow_schedule_crons(astrbot_update), ['45 3 * * *'])
+        self.assertEqual(workflow_schedule_crons(task), ['30 2 * * *'])
+        self.assertEqual(workflow_job_condition(workflow_job(pixelterm, 'update'), 'update'), pixelterm_condition)
+        self.assertEqual(workflow_job_condition(workflow_job(astrbot_update, 'update'), 'update'), astrbot_condition)
+        self.assertEqual(workflow_job_condition(workflow_job(task, 'sync'), 'sync'), pixelterm_condition)
+        self.assertEqual(workflow_concurrency(pixelterm),
+                         'group: auto-aur-update-pixelterm cancel-in-progress: false')
+        self.assertEqual(workflow_concurrency(astrbot_update),
                          'group: auto-aur-update-astrbot cancel-in-progress: false')
-        self.assertEqual(workflow_job_concurrency(task, 'Task'),
+        self.assertEqual(workflow_concurrency(task),
                          'group: auto-aur-update-sync cancel-in-progress: false')
-        self.assertIn('uses: ./.github/workflows/publish-astrbot-desktop-bin.yml', main)
-        self.assertIn('secrets: inherit', main)
-        self.assertNotIn('\n    needs:', task)
+        self.assertIn('workflow_dispatch:', pixelterm)
+        self.assertNotIn('aur-update-queue', pixelterm)
+        self.assertNotIn('PixelTerm-Rebuild-Requests', pixelterm)
+        self.assertNotIn('needs:', pixelterm)
+        self.assertNotIn('rebuild_current', pixelterm)
+        self.assertIn('uses: ./.github/workflows/publish-astrbot-desktop-bin.yml', astrbot_update)
+        self.assertIn('secrets: inherit', astrbot_update)
+        self.assertIn('workflow_dispatch:', astrbot_update)
+        self.assertNotIn('needs:', task)
+        self.assertIn('git add time.log', task)
+        self.assertNotIn('git add .', task)
         self.assertIn('workflow_call:', publish)
         self.assertIn('source_sha: ${{ inputs.source_sha }}', publish)
         self.assertNotIn('workflow_run:', publish)
-        self.assertNotIn('workflow_dispatch:', validation)
-
-    def test_pixelterm_rebuild_queue_is_durable_and_acknowledges_only_its_snapshot(self):
-        main = AUTO_UPDATE_WORKFLOW.read_text()
-        queue_job = workflow_job(main, 'QueuePixelTermRebuild')
-        pixelterm = workflow_job(main, 'UpdatePkg')
-        enqueue = workflow_step_run(
-            workflow_step(queue_job, 'Queue durable PixelTerm rebuild request'),
-            'Queue durable PixelTerm rebuild request',
-        )
-        detect = workflow_step_run(
-            workflow_step(pixelterm, 'Detect queued PixelTerm rebuild requests'),
-            'Detect queued PixelTerm rebuild requests',
-        )
-        acknowledge = workflow_step_run(
-            workflow_step(pixelterm, 'Acknowledge published PixelTerm rebuild requests'),
-            'Acknowledge published PixelTerm rebuild requests',
-        )
-
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            remote = root / 'origin.git'
-            aur_remote = root / 'aur.git'
-            aur_checkout = root / 'aur-checkout'
-            checkout = root / 'checkout'
-            fake_bin = root / 'bin'
-            fake_bin.mkdir()
-            (fake_bin / 'timeout').write_text('''#!/bin/sh
-set -eu
-if [ "${1:-}" = "--signal=TERM" ]; then
-  shift 2
-fi
-exec "$@"
-''')
-            (fake_bin / 'timeout').chmod(0o755)
-            stale_ref = 'refs/heads/aur-update-queue/pixelterm-rebuild-7001-1'
-            active_ref = 'refs/heads/aur-update-queue/pixelterm-rebuild-7001-2'
-            second_active_ref = 'refs/heads/aur-update-queue/pixelterm-rebuild-7002-1'
-            later_ref = 'refs/heads/aur-update-queue/pixelterm-rebuild-7003-1'
-            env = {
-                **os.environ,
-                'GIT_AUTHOR_NAME': 'Test',
-                'GIT_AUTHOR_EMAIL': 'test@example.org',
-                'GIT_COMMITTER_NAME': 'Test',
-                'GIT_COMMITTER_EMAIL': 'test@example.org',
-                'PATH': f'{fake_bin}{os.pathsep}{os.environ["PATH"]}',
-                'PIXELTERM_AUR_REPO_URL': str(aur_remote),
-            }
-            subprocess.run(['git', 'init', '--bare', '--initial-branch=main', str(remote)],
-                           check=True, capture_output=True)
-            subprocess.run(['git', 'init', '--bare', '--initial-branch=master', str(aur_remote)],
-                           check=True, capture_output=True)
-            subprocess.run(['git', 'clone', str(aur_remote), str(aur_checkout)],
-                           check=True, capture_output=True)
-            marker_message = (
-                'Update AUR package\n'
-                f'{second_active_ref}\n\n'
-                'PixelTerm-Rebuild-Requests:\n'
-                f'{stale_ref}\n'
-                f'Request ID: {active_ref}\n'
-            )
-            subprocess.run(['git', '-C', str(aur_checkout), 'commit', '--allow-empty',
-                            '-m', marker_message], env=env, check=True, capture_output=True)
-            subprocess.run(['git', '-C', str(aur_checkout), 'push', 'origin', 'master'],
-                           env=env, check=True, capture_output=True)
-            subprocess.run(['git', 'init', '--initial-branch=main', str(checkout)],
-                           check=True, capture_output=True)
-            subprocess.run(['git', 'remote', 'add', 'origin', str(remote)], cwd=checkout,
-                           check=True, capture_output=True)
-            Path(checkout, 'README').write_text('queue test\n')
-            subprocess.run(['git', 'add', 'README'], cwd=checkout, check=True, capture_output=True)
-            subprocess.run(['git', 'commit', '-m', 'seed'], cwd=checkout, env=env,
-                           check=True, capture_output=True)
-            subprocess.run(['git', 'push', 'origin', 'main'], cwd=checkout,
-                           check=True, capture_output=True)
-
-            def run_workflow_script(script, extra_env=None):
-                result = subprocess.run(['bash', '-e', '-o', 'pipefail', '-c', script],
-                                        cwd=checkout, env={**env, **(extra_env or {})},
-                                        text=True, capture_output=True)
-                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                return result
-
-            def output_block(output, name):
-                block = output.split(f'{name}<<EOF\n', 1)[1]
-                if block.startswith('EOF\n'):
-                    return ''
-                return block.split('\nEOF', 1)[0]
-
-            def publish_markers(refs):
-                message = 'Update AUR package\nPixelTerm-Rebuild-Requests:\n'
-                message += '\n'.join(refs) + '\n'
-                subprocess.run(['git', '-C', str(aur_checkout), 'commit', '--allow-empty',
-                                '-m', message], env=env, check=True, capture_output=True)
-                subprocess.run(['git', '-C', str(aur_checkout), 'push', 'origin', 'master'],
-                               env=env, check=True, capture_output=True)
-
-            def queued_refs():
-                output = git_output('ls-remote', '--heads', 'origin',
-                                    'refs/heads/aur-update-queue/pixelterm-rebuild-*',
-                                    cwd=checkout, env=env)
-                return sorted(line.split('\t', 1)[1] for line in output.splitlines())
-
-            for request_id, attempt in (('7001', '1'), ('7001', '2'), ('7002', '1')):
-                run_workflow_script(enqueue, {
-                    'REQUEST_ID': request_id,
-                    'REQUEST_ATTEMPT': attempt,
-                })
-            first_snapshot = queued_refs()
-            self.assertEqual(first_snapshot, [
-                stale_ref,
-                active_ref,
-                second_active_ref,
-            ])
-
-            output_file = root / 'github-output'
-            run_workflow_script(detect, {'GITHUB_OUTPUT': str(output_file)})
-            detected = output_file.read_text()
-            self.assertIn('pending=true\n', detected)
-            snapshot_refs = output_block(detected, 'refs')
-            self.assertEqual(snapshot_refs.splitlines(), first_snapshot)
-            self.assertEqual(output_block(detected, 'active_refs'),
-                             f'{active_ref}\n{second_active_ref}')
-            self.assertIn('rebuild_needed=true\n', detected)
-
-            run_workflow_script(enqueue, {
-                'REQUEST_ID': '7003',
-                'REQUEST_ATTEMPT': '1',
-            })
-            publish_markers(first_snapshot)
-            run_workflow_script(acknowledge, {'REQUEST_REFS': snapshot_refs})
-            self.assertEqual(queued_refs(), [
-                later_ref,
-            ])
-
-            output_file.write_text('')
-            run_workflow_script(detect, {'GITHUB_OUTPUT': str(output_file)})
-            detected = output_file.read_text()
-            self.assertIn('pending=true\n', detected)
-            self.assertEqual(output_block(detected, 'refs'), later_ref)
-            self.assertEqual(output_block(detected, 'active_refs'), later_ref)
-            self.assertIn('rebuild_needed=true\n', detected)
-
-            # Once the later request is present in AUR history, detection keeps it
-            # queued for acknowledgement but disables the rebuild increment.
-            publish_markers([later_ref])
-            output_file.write_text('')
-            run_workflow_script(detect, {'GITHUB_OUTPUT': str(output_file)})
-            detected = output_file.read_text()
-            self.assertIn('pending=true\n', detected)
-            self.assertEqual(output_block(detected, 'refs'), later_ref)
-            self.assertEqual(output_block(detected, 'active_refs'), '')
-            self.assertIn('rebuild_needed=false\n', detected)
-
-            run_workflow_script(acknowledge, {
-                'REQUEST_REFS': later_ref,
-            })
-            # A retry after a successful deletion is idempotent.
-            run_workflow_script(acknowledge, {'REQUEST_REFS': later_ref})
-
-            output_file.write_text('')
-            run_workflow_script(detect, {'GITHUB_OUTPUT': str(output_file)})
-            self.assertEqual(output_file.read_text(), 'pending=false\nrebuild_needed=false\n')
-
-    def test_pixelterm_rebuild_queue_ack_failure_is_not_swallowed(self):
-        pixelterm = workflow_job(AUTO_UPDATE_WORKFLOW.read_text(), 'UpdatePkg')
-        acknowledge = workflow_step_run(
-            workflow_step(pixelterm, 'Acknowledge published PixelTerm rebuild requests'),
-            'Acknowledge published PixelTerm rebuild requests',
-        )
-        with tempfile.TemporaryDirectory() as directory:
-            fake_bin = Path(directory)
-            (fake_bin / 'git').write_text('#!/bin/sh\nexit 99\n')
-            (fake_bin / 'git').chmod(0o755)
-            result = subprocess.run(
-                ['bash', '-e', '-o', 'pipefail', '-c', acknowledge],
-                env={**os.environ, 'PATH': f'{fake_bin}{os.pathsep}{os.environ["PATH"]}',
-                     'REQUEST_REFS': 'refs/heads/aur-update-queue/pixelterm-rebuild-test-1'},
-                text=True,
-                capture_output=True,
-            )
-            self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('timeout-minutes: 20', publish)
 
     def test_pr_and_publish_workflows_call_shared_build_pipeline(self):
         self.assertTrue(BUILD_WORKFLOW.is_file())
@@ -541,6 +302,15 @@ class DeploymentTests(unittest.TestCase):
             root = Path(directory)
             clone = root / 'clone'
             clone.mkdir()
+            bin_dir = root / 'bin'
+            bin_dir.mkdir()
+            vercmp = bin_dir / 'vercmp'
+            vercmp.write_text('''#!/bin/bash
+if [[ "$1" == "$2" ]]; then echo 0; exit 0; fi
+first=$(printf '%s\\n%s\\n' "$1" "$2" | sort -V | head -n1)
+if [[ "$first" == "$1" ]]; then echo -1; else echo 1; fi
+''')
+            vercmp.chmod(0o755)
             (clone / 'PKGBUILD').write_text(existing)
             source = root / 'incoming'
             source.write_text(incoming)
@@ -548,7 +318,8 @@ class DeploymentTests(unittest.TestCase):
                             'if [[ -n "$assets" ]]')
             block = block.replace('/tmp/local-repo', str(clone)).replace('/tmp/generated-PKGBUILD', str(root / 'generated'))
             result = subprocess.run(['bash', '-c', 'set -euo pipefail\npkgbuild=$1\n' + block,
-                                     'bash', str(source)], text=True, capture_output=True)
+                                     'bash', str(source)], text=True, capture_output=True,
+                                    env={**os.environ, 'PATH': f'{bin_dir}{os.pathsep}{os.environ["PATH"]}'})
             self.assertEqual((clone / 'PKGBUILD').read_text(), incoming if accepted else existing,
                              result.stdout + result.stderr)
             return result
@@ -672,21 +443,32 @@ class FinalPackageTests(unittest.TestCase):
             root = Path(directory)
             env = {**os.environ, 'GIT_AUTHOR_NAME': 'Test', 'GIT_COMMITTER_NAME': 'Test',
                    'GIT_AUTHOR_EMAIL': 'test@example.org', 'GIT_COMMITTER_EMAIL': 'test@example.org'}
+            bin_dir = root / 'bin'
+            bin_dir.mkdir()
+            vercmp = bin_dir / 'vercmp'
+            vercmp.write_text('''#!/bin/bash
+if [[ "$1" == "$2" ]]; then echo 0; exit 0; fi
+first=$(printf '%s\\n%s\\n' "$1" "$2" | sort -V | head -n1)
+if [[ "$first" == "$1" ]]; then echo -1; else echo 1; fi
+''')
+            vercmp.chmod(0o755)
+            env['PATH'] = f'{bin_dir}{os.pathsep}{env["PATH"]}'
             def git(*args):
                 return subprocess.check_output(['git', '-C', directory, *args], env=env, text=True)
             git('init', '--initial-branch=master')
             (root / 'PKGBUILD').write_text('pkgver=4.29.1\npkgrel=1\n')
             metadata = 'pkgbase = test-package\n\tpkgver = 4.29.1\n\tpkgrel = 1\n'
             (root / '.SRCINFO').write_text(metadata)
-            (root / 'helper.sh').write_text('original asset')
+            asset = root / 'package-helper.data'
+            asset.write_text('original asset')
             git('add', '.')
-            git('add', '-f', 'helper.sh')
+            git('add', 'package-helper.data')
             git('commit', '-qm', 'initial')
             original = git('rev-parse', 'HEAD').strip()
             if change == 'asset':
-                (root / 'helper.sh').write_text('changed asset')
+                asset.write_text('changed asset')
             elif change == 'deleted_asset':
-                (root / 'helper.sh').unlink()
+                asset.unlink()
             elif change == 'post_process':
                 block = section("if [ -n \"$post_process\" ]; then",
                                 "echo '::group::Generating .SRCINFO'")
@@ -699,9 +481,9 @@ class FinalPackageTests(unittest.TestCase):
                 (root / 'PKGBUILD').write_text('pkgver=4.29.1\npkgrel=2\n')
             block = section("echo '::group::Committing files to the repository'",
                             "echo '::group::Publishing the repository'")
-            result = subprocess.run(['bash', '-c', 'set -euo pipefail\nassets=helper.sh\nallow_empty_commits=false\ncommit_message=update\n' + block],
+            result = subprocess.run(['bash', '-c', 'set -euo pipefail\nassets=package-helper.data\nallow_empty_commits=false\ncommit_message=update\n' + block],
                                     cwd=directory, env=env, text=True, capture_output=True)
-            self.committed_asset = git('show', 'HEAD:helper.sh')
+            self.committed_asset = git('show', 'HEAD:package-helper.data')
             return result, original == git('rev-parse', 'HEAD').strip()
 
     def test_final_changes_require_version_bump(self):

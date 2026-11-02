@@ -6,20 +6,23 @@ Update the program in aur warehouse automatically
 `astrbot-desktop-bin` repackages the official stable Debian binaries for
 `x86_64` and `aarch64`. PixelTerm-C keeps its existing updater and build action.
 
-- `.github/workflows/main.yml` is the top-level scheduled and manual update flow. PixelTerm-C remains scheduled at 02:30 UTC; AstrBot runs at 03:45 UTC.
-- Manually dispatch `main.yml` on the `main` branch to run both package updates and the existing Task sync. The package jobs run independently, so a package update failure does not skip Task sync.
-- `main.yml` calls `.github/workflows/publish-astrbot-desktop-bin.yml` as a reusable workflow for the AstrBot update. Pull requests are validated by `.github/workflows/astrbot-desktop-bin.yml` without AUR credentials.
-- The PixelTerm-C and Task jobs also retain their owner-only repository-watch trigger. Package publishing requires `main`.
-- A manual PixelTerm-C rebuild request is stored as a unique Git ref and remains queued if its
-  run is replaced or publishing fails. The next serialized PixelTerm update rebuilds the current
-  AUR version and removes only the requests it observed after publishing succeeds. The AUR
-  commit records those refs, so a retry after a successful publish but failed cleanup removes
-  the queued refs without rebuilding again. Requests observed together share one rebuild.
+- `.github/workflows/pixelterm-update.yml` updates PixelTerm-C at 02:30 UTC and supports a
+  manual dispatch. It serializes AUR publishes and is idempotent when the package is already
+  current. For a dependency ABI or packaging-only rebuild, increase `pkgrel` in the committed
+  `pixelterm-c/PKGBUILD` and dispatch the workflow; the change is explicit and reviewable.
+- `.github/workflows/astrbot-update.yml` updates AstrBot at 03:45 UTC and supports a manual
+  dispatch. It calls `.github/workflows/publish-astrbot-desktop-bin.yml` as a reusable workflow.
+- `.github/workflows/task-sync.yml` keeps the repository Task sync independent from package
+  publishing and retains the owner-only repository-watch trigger. Every workflow publishes
+  only from `main`.
+- Pull requests are validated by `.github/workflows/astrbot-desktop-bin.yml` without AUR
+  credentials.
 - The updater requires both release assets and their GitHub SHA256 digests;
   makepkg downloads and verifies the actual files before publishing.
-- New upstream versions normally start at `pkgrel=1`, unless the template
-  intentionally specifies a higher revision. Existing same-version AUR revisions are never lowered.
-  For packaging-only changes, bump `pkgrel` in the committed template.
+- PixelTerm-C starts a new upstream version at `pkgrel=1`. For a same-version
+  dependency ABI or packaging-only rebuild, bump `pkgrel` in the committed
+  `pixelterm-c/PKGBUILD`; the updater keeps the higher of that value and AUR's
+  current revision. AstrBot preserves higher committed/AUR revisions.
 - PRs run tests and both repackaging builds without AUR credentials. Scheduled
   and manually dispatched runs on `main` publish using the existing
   `AUR_USERNAME`, `AUR_EMAIL`, and `AUR_SSH_PRIVATE_KEY` secrets. No binaries
