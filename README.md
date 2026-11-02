@@ -6,7 +6,8 @@ Update the program in aur warehouse automatically
 `astrbot-desktop-bin` repackages the official stable Debian binaries for
 `x86_64` and `aarch64`. PixelTerm-C uses its existing, separate workflow.
 
-- `.github/workflows/astrbot-desktop-bin.yml` checks daily or on manual dispatch.
+- `.github/workflows/publish-astrbot-desktop-bin.yml` publishes daily or after a successful `main` validation run.
+- `.github/workflows/astrbot-desktop-bin.yml` validates pull requests and manual runs without AUR credentials.
 - The updater requires both release assets and their GitHub SHA256 digests;
   makepkg downloads and verifies the actual files before publishing.
 - New upstream versions normally start at `pkgrel=1`, unless the template

@@ -1,0 +1,74 @@
+name: Build AstrBot AUR package
+
+on:
+  workflow_call:
+    inputs:
+      source_sha:
+        description: Commit used to prepare and build the package
+        required: true
+        type: string
+    outputs:
+      source_sha:
+        description: Commit used to prepare and build the package
+        value: ${{ jobs.prepare.outputs.source_sha }}
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    outputs:
+      source_sha: ${{ inputs.source_sha }}
+    steps:
+      - name: Install test tools
+        run: pacman -Syu --noconfirm --needed git python openssh
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.source_sha }}
+      - name: Test updater
+        run: python3 -m unittest discover -s tests -v
+      - name: Update stable release metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/astrbot-desktop-bin.py
+      - name: Record prepared source commit
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: printf '%s\n' "$SOURCE_SHA" > astrbot-desktop-bin/source-sha
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: astrbot-pkgbuild
+          path: |
+            astrbot-desktop-bin/PKGBUILD
+            astrbot-desktop-bin/aur-revision
+            astrbot-desktop-bin/source-sha
+          if-no-files-found: error
+
+  build:
+    needs: prepare
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x86_64, aarch64]
+    steps:
+      - name: Install build and runtime dependencies
+        run: pacman -Syu --noconfirm --needed git gtk3 webkit2gtk-4.1 libayatana-appindicator
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: astrbot-pkgbuild
+          path: package
+      - name: Validate and build binary package
+        env:
+          PACKAGE_ARCH: ${{ matrix.arch }}
+        run: |
+          useradd --create-home builder
+          chown -R builder:builder package
+          cp /etc/makepkg.conf /tmp/astrbot-makepkg.conf
+          sed -i "s/^CARCH=.*/CARCH=$PACKAGE_ARCH/" /tmp/astrbot-makepkg.conf
+          cd package
+          # ARM payload is repacked, not executed, on this x86_64 runner.
+          runuser -u builder -- makepkg --config /tmp/astrbot-makepkg.conf --ignorearch --cleanbuild --clean --noconfirm

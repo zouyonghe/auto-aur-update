@@ -7,8 +7,10 @@ import unittest
 
 WORKFLOW = Path(__file__).resolve().parents[1] / '.github/workflows/astrbot-desktop-bin.yml'
 PUBLISH_WORKFLOW = Path(__file__).resolve().parents[1] / '.github/workflows/publish-astrbot-desktop-bin.yml'
+BUILD_WORKFLOW = Path(__file__).resolve().parents[1] / '.github/workflows/build-astrbot-desktop-bin.yml'
 
 SCRIPT = Path(__file__).resolve().parents[1] / '.github/actions/deploy-aur/build.sh'
+SSH_CONFIG = Path(__file__).resolve().parents[1] / '.github/actions/deploy-aur/ssh_config'
 
 
 class CloneTests(unittest.TestCase):
@@ -88,8 +90,66 @@ fi
 
     def test_publish_workflow_is_main_only(self):
         text = PUBLISH_WORKFLOW.read_text()
-        self.assertIn("if: github.ref == 'refs/heads/main'", text)
-        self.assertIn('secrets.AUR_SSH_PRIVATE_KEY', text)
+        jobs = {}
+        current = None
+        for line in text.split('jobs:\n', 1)[1].splitlines():
+            if line.startswith('  ') and not line.startswith('    ') and line.endswith(':'):
+                current = line.strip()[:-1]
+                jobs[current] = []
+            elif current is not None:
+                jobs[current].append(line)
+        publishers = {
+            name: '\n'.join(lines) for name, lines in jobs.items()
+            if 'secrets.AUR_' in '\n'.join(lines) or 'uses: ./.github/actions/deploy-aur' in '\n'.join(lines)
+        }
+        self.assertTrue(publishers)
+        for name, body in publishers.items():
+            with self.subTest(job=name):
+                self.assertIn("github.ref == 'refs/heads/main'", body)
+
+    def test_pr_validation_covers_publish_and_shared_workflows(self):
+        text = WORKFLOW.read_text()
+        self.assertIn("      - '.github/workflows/publish-astrbot-desktop-bin.yml'", text)
+        self.assertIn("      - '.github/workflows/build-astrbot-desktop-bin.yml'", text)
+
+    def test_manual_publish_uses_trusted_workflow_run(self):
+        validation = WORKFLOW.read_text()
+        publish = PUBLISH_WORKFLOW.read_text()
+        self.assertIn('workflow_dispatch:', validation)
+        self.assertNotIn('workflow_dispatch:', publish)
+        self.assertIn('workflow_run:', publish)
+        self.assertIn("workflows: ['Update AstrBot AUR package']", publish)
+        self.assertIn("github.event.workflow_run.head_branch == 'main'", publish)
+        self.assertIn('github.event.workflow_run.head_repository.full_name == github.repository', publish)
+        self.assertIn("github.event.workflow_run.conclusion == 'success'", publish)
+        self.assertIn('source_sha: ${{ github.event_name == \'workflow_run\' && github.event.workflow_run.head_sha || github.sha }}', publish)
+
+    def test_pr_and_publish_workflows_call_shared_build_pipeline(self):
+        self.assertTrue(BUILD_WORKFLOW.is_file())
+        self.assertIn('uses: ./.github/workflows/build-astrbot-desktop-bin.yml', WORKFLOW.read_text())
+        publish = PUBLISH_WORKFLOW.read_text()
+        self.assertIn('uses: ./.github/workflows/build-astrbot-desktop-bin.yml', publish)
+        self.assertNotIn('container: archlinux:base-devel', publish)
+        self.assertNotIn('run: pacman', publish)
+
+    def test_publish_checks_out_the_prepared_source_revision(self):
+        publish = PUBLISH_WORKFLOW.read_text()
+        self.assertIn('ref: ${{ needs.prepare.outputs.source_sha }}', publish)
+        self.assertIn('artifact_sha=$(cat astrbot-desktop-bin/source-sha)', publish)
+        self.assertIn('checkout_sha=$(git rev-parse HEAD)', publish)
+        self.assertIn('"$artifact_sha" != "$PREPARED_SHA" || "$checkout_sha" != "$PREPARED_SHA"', publish)
+        build = BUILD_WORKFLOW.read_text()
+        self.assertIn('value: ${{ jobs.prepare.outputs.source_sha }}', build)
+        self.assertIn('source_sha: ${{ inputs.source_sha }}', build)
+
+    def test_aur_network_calls_have_bounded_timeouts(self):
+        script = SCRIPT.read_text()
+        self.assertIn('timeout --signal=TERM 15s ssh-keyscan -T 10', script)
+        self.assertIn('curl --fail --silent --show-error --connect-timeout 10 --max-time 30 --get', script)
+        ssh_config = SSH_CONFIG.read_text()
+        self.assertIn('ConnectTimeout 10', ssh_config)
+        self.assertIn('ServerAliveInterval 15', ssh_config)
+        self.assertIn('ServerAliveCountMax 2', ssh_config)
 
     def test_network_failure_aborts_without_initializing_repository(self):
         result, exists, _ = self.run_clone(fail=True, api_count='1')
@@ -175,7 +235,8 @@ class DeploymentTests(unittest.TestCase):
             block = block.replace('/tmp/local-repo', str(clone)).replace('/tmp/generated-PKGBUILD', str(root / 'generated'))
             result = subprocess.run(['bash', '-c', 'set -euo pipefail\npkgbuild=$1\n' + block,
                                      'bash', str(source)], text=True, capture_output=True)
-            self.assertEqual((clone / 'PKGBUILD').read_text(), incoming if accepted else existing)
+            self.assertEqual((clone / 'PKGBUILD').read_text(), incoming if accepted else existing,
+                             result.stdout + result.stderr)
             return result
 
     def test_malicious_pkgrel_is_rejected_before_sed_or_vercmp(self):

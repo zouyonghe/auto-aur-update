@@ -1,4 +1,6 @@
 import importlib.util
+from io import BytesIO
+import hashlib
 from pathlib import Path
 import unittest
 import re
@@ -92,6 +94,18 @@ class UpdateTests(unittest.TestCase):
     def test_verify_accepts_built_release(self):
         built = self.module.update(self.template, self.release, None)
         self.module.verify_release(built, self.release)
+
+    def test_verify_release_assets_rejects_bytes_with_mismatched_digest(self):
+        payloads = [b'x86_64 release asset', b'aarch64 release asset']
+        release = {**self.release, 'assets': [dict(asset) for asset in self.release['assets']]}
+        for asset, payload in zip(release['assets'], payloads):
+            asset['digest'] = 'sha256:' + hashlib.sha256(payload).hexdigest()
+            asset['browser_download_url'] = 'https://downloads.example.invalid/' + asset['name']
+        built = self.module.update(self.template, release, None)
+        replaced = [BytesIO(b'replaced release asset'), BytesIO(payloads[1])]
+        with mock.patch.object(self.module.urllib.request, 'urlopen', side_effect=replaced):
+            with self.assertRaisesRegex(ValueError, 'asset changed during final verification'):
+                self.module.verify_release_assets(built, release)
 
     def test_verify_preserves_prepared_revisions(self):
         built = self.module.update(self.template, self.release, None)

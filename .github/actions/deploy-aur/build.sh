@@ -44,8 +44,11 @@ GLOBIGNORE=".:.."
 
 echo '::group::Adding aur.archlinux.org to known hosts'
 # Pins published at https://aur.archlinux.org/; rotation requires review.
-host_keys=$(ssh-keyscan -t "$ssh_keyscan_types" aur.archlinux.org)
-[[ -n "$host_keys" ]]
+if ! host_keys=$(timeout --signal=TERM 15s ssh-keyscan -T 10 -t "$ssh_keyscan_types" aur.archlinux.org); then
+  echo 'AUR SSH host scan failed or timed out.' >&2
+  exit 1
+fi
+[[ -n "$host_keys" ]] || { echo 'AUR SSH host scan returned no keys.' >&2; exit 1; }
 : > ~/.ssh/known_hosts
 while IFS= read -r host_key; do
   fingerprint=$(printf '%s\n' "$host_key" | ssh-keygen -lf - -E sha256 | awk '{print $2}')
@@ -75,8 +78,11 @@ echo '::endgroup::'
 echo '::group::Cloning AUR package into /tmp/local-repo'
 # Confirm absence through AUR's API before handling first publication. A clone
 # failure alone is never evidence of absence; transport errors fail closed.
-aur_info=$(curl --fail --silent --show-error --get \
-  --data-urlencode "arg[]=${pkgname}" https://aur.archlinux.org/rpc/v5/info)
+if ! aur_info=$(curl --fail --silent --show-error --connect-timeout 10 --max-time 30 --get \
+  --data-urlencode "arg[]=${pkgname}" https://aur.archlinux.org/rpc/v5/info); then
+  echo 'AUR RPC request failed or timed out.' >&2
+  exit 1
+fi
 aur_type=$(jq -er '.type' <<< "$aur_info")
 [[ "$aur_type" == multiinfo ]] || { echo 'AUR RPC returned an error.' >&2; exit 1; }
 aur_count=$(jq -er '.resultcount' <<< "$aur_info")
