@@ -10,6 +10,9 @@ Update the program in aur warehouse automatically
 - Manually dispatch `main.yml` on the `main` branch to run both package updates and the existing Task sync. The package jobs run independently, so a package update failure does not skip Task sync.
 - `main.yml` calls `.github/workflows/publish-astrbot-desktop-bin.yml` as a reusable workflow for the AstrBot update. Pull requests are validated by `.github/workflows/astrbot-desktop-bin.yml` without AUR credentials.
 - The PixelTerm-C and Task jobs also retain their owner-only repository-watch trigger. Package publishing requires `main`.
+- A manual PixelTerm-C rebuild request is stored as a unique Git ref and remains queued if its
+  run is replaced or publishing fails. The next serialized PixelTerm update rebuilds the current
+  AUR version and removes only the requests it observed after publishing succeeds.
 - The updater requires both release assets and their GitHub SHA256 digests;
   makepkg downloads and verifies the actual files before publishing.
 - New upstream versions normally start at `pkgrel=1`, unless the template

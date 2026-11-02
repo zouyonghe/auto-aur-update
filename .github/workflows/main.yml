@@ -17,15 +17,39 @@ permissions:
   contents: write
 
 jobs:
+  QueuePixelTermRebuild:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        if: >-
+          github.ref == 'refs/heads/main' &&
+          github.event_name == 'workflow_dispatch' &&
+          inputs.rebuild_current == true
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Queue durable PixelTerm rebuild request
+        if: >-
+          github.ref == 'refs/heads/main' &&
+          github.event_name == 'workflow_dispatch' &&
+          inputs.rebuild_current == true
+        env:
+          REQUEST_ID: ${{ github.run_id }}
+          REQUEST_ATTEMPT: ${{ github.run_attempt }}
+        run: git push origin "HEAD:refs/heads/aur-update-queue/pixelterm-rebuild-${REQUEST_ID}-${REQUEST_ATTEMPT}"
+
   UpdatePkg:
     if: >-
+      always() &&
+      needs.QueuePixelTermRebuild.result == 'success' &&
       github.ref == 'refs/heads/main' &&
       (github.event_name == 'workflow_dispatch' ||
        (github.event_name == 'watch' &&
         github.event.repository.owner.id == github.event.sender.id) ||
        (github.event_name == 'schedule' && github.event.schedule == '30 2 * * *'))
+    needs: QueuePixelTermRebuild
     concurrency:
-      group: ${{ inputs.rebuild_current == true && format('auto-aur-update-pixelterm-rebuild-{0}', github.run_id) || format('auto-aur-update-pixelterm-{0}', matrix.PKGBUILDs) }}
+      group: auto-aur-update-pixelterm-${{ matrix.PKGBUILDs }}
       cancel-in-progress: false
     strategy:
       fail-fast: false
@@ -37,11 +61,25 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+      - name: Detect queued PixelTerm rebuild requests
+        id: rebuild_queue
+        run: |
+          request_refs=$(git ls-remote --heads origin 'refs/heads/aur-update-queue/pixelterm-rebuild-*' | awk '{ print $2 }')
+          if [[ -n "$request_refs" ]]; then
+            echo 'pending=true' >> "$GITHUB_OUTPUT"
+            {
+              echo 'refs<<EOF'
+              printf '%s\n' "$request_refs"
+              echo EOF
+            } >> "$GITHUB_OUTPUT"
+          else
+            echo 'pending=false' >> "$GITHUB_OUTPUT"
+          fi
       - uses: ./build-aur-action
         with:
           pkgname: ${{ matrix.PKGBUILDs }}
           pkgdir: ${{ matrix.PKGBUILDs }}
-          rebuild_current: ${{ inputs.rebuild_current || 'false' }}
+          rebuild_current: ${{ steps.rebuild_queue.outputs.pending == 'true' && 'true' || 'false' }}
 
       - name: Publish AUR package
         uses: ./.github/actions/deploy-aur
@@ -54,6 +92,15 @@ jobs:
           commit_message: Update AUR package
           ssh_keyscan_types: rsa,ecdsa,ed25519
           allow_empty_commits: false
+      - name: Acknowledge published PixelTerm rebuild requests
+        if: steps.rebuild_queue.outputs.pending == 'true'
+        env:
+          REQUEST_REFS: ${{ steps.rebuild_queue.outputs.refs }}
+        run: |
+          while IFS= read -r request_ref; do
+            [[ -n "$request_ref" ]] || continue
+            git push origin ":$request_ref"
+          done <<< "$REQUEST_REFS"
 
   UpdateAstrBot:
     if: >-
