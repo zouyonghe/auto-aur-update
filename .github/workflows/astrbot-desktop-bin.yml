@@ -1,0 +1,26 @@
+name: Update AstrBot AUR package
+
+on:
+  pull_request:
+    paths:
+      - 'astrbot-desktop-bin/**'
+      - 'scripts/astrbot-desktop-bin.py'
+      - 'tests/**'
+      - '.github/workflows/astrbot-desktop-bin.yml'
+      - '.github/workflows/publish-astrbot-desktop-bin.yml'
+      - '.github/workflows/build-astrbot-desktop-bin.yml'
+      - '.github/actions/deploy-aur/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: astrbot-aur-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    uses: ./.github/workflows/build-astrbot-desktop-bin.yml
+    with:
+      source_sha: ${{ github.sha }}
