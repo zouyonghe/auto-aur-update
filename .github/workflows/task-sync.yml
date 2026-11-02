@@ -10,6 +10,8 @@ on:
 permissions:
   contents: write
 
+# Serialize syncs per branch; triggers reconcile repository state.
+# A new pending run can replace an older pending run; this is not a FIFO queue.
 concurrency:
   group: auto-aur-update-sync-${{ github.ref }}
   cancel-in-progress: false

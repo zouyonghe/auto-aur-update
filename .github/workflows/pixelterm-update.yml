@@ -10,8 +10,8 @@ on:
 permissions:
   contents: read
 
-# AUR accepts one master push at a time. A later run waits for the current run
-# and can safely no-op when the package is already current.
+# Serialize publishes per branch; triggers reconcile package state.
+# A new pending run can replace an older pending run; this is not a FIFO queue.
 concurrency:
   group: auto-aur-update-pixelterm-${{ github.ref }}
   cancel-in-progress: false

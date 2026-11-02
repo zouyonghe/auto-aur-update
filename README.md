@@ -16,6 +16,12 @@ Update the program in aur warehouse automatically
 - `.github/workflows/task-sync.yml` keeps the repository Task sync independent from package
   publishing and retains the owner-only repository-watch trigger. Every workflow publishes
   only from `main`.
+- Triggers request state reconciliation, not publication of every event or source snapshot.
+  Each workflow/branch keeps one active run and at most one pending run; a later trigger
+  can replace a pending run even with `cancel-in-progress: false`. Manual dispatches follow
+  the same rule. If a required run was replaced or failed, dispatch again from current `main`.
+  Explicit `pkgver`/`pkgrel` changes remain in Git for subsequent runs; there is no one-shot
+  rebuild request or FIFO delivery guarantee.
 - Pull requests are validated by `.github/workflows/astrbot-desktop-bin.yml` without AUR
   credentials.
 - The updater requires both release assets and their GitHub SHA256 digests;

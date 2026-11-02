@@ -8,6 +8,8 @@ on:
 permissions:
   contents: read
 
+# Serialize publishes per branch; triggers reconcile package state.
+# A new pending run can replace an older pending run; this is not a FIFO queue.
 concurrency:
   group: auto-aur-update-astrbot-${{ github.ref }}
   cancel-in-progress: false
