@@ -133,6 +133,8 @@ fi
         self.assertIn('uses: ./.github/workflows/publish-astrbot-desktop-bin.yml', main)
         self.assertIn('secrets: inherit', main)
         self.assertIn('  Task:', main)
+        task = main.split('\n  Task:\n', 1)[1]
+        self.assertNotIn('\n    needs:', task)
         self.assertIn('workflow_call:', publish)
         self.assertIn('source_sha: ${{ inputs.source_sha }}', publish)
         self.assertNotIn('workflow_run:', publish)
