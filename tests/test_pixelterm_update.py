@@ -11,7 +11,8 @@ SCRIPT = ROOT / 'scripts/pixelterm-c.sh'
 
 
 class PixelTermUpdateTests(unittest.TestCase):
-    def run_update(self, current_rel, *, template_rel='1',
+    def run_update(self, current_rel, *, current_version='1.8.2',
+                   template_version='1.8.2', template_rel='1', template_indent='',
                    latest_version='1.8.2', expect_success=True):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -23,7 +24,8 @@ class PixelTermUpdateTests(unittest.TestCase):
             scripts_dir.mkdir()
             source_archive = root / 'source.tar.gz'
             (package_dir / 'PKGBUILD').write_text(
-                f'pkgver=1.8.2\npkgrel={template_rel}\nsha256sums=(\'old\')\n'
+                f'pkgver={template_version}\n{template_indent}pkgrel={template_rel}\n'
+                "sha256sums=('old')\n"
             )
             script = SCRIPT.read_text().replace('/tmp/pixelterm-c.tar.gz', str(source_archive))
             (scripts_dir / SCRIPT.name).write_text(script)
@@ -66,8 +68,8 @@ echo 0
 ''',
                 'makepkg': '''#!/bin/bash
 set -eu
-pkgver=$(/usr/bin/sed -n 's/^pkgver=//p' PKGBUILD)
-pkgrel=$(/usr/bin/sed -n 's/^pkgrel=//p' PKGBUILD)
+pkgver=$(/usr/bin/sed -n 's/^[[:space:]]*pkgver=//p' PKGBUILD)
+pkgrel=$(/usr/bin/sed -n 's/^[[:space:]]*pkgrel=//p' PKGBUILD)
 printf 'pkgver = %s\\npkgrel = %s\\n' "$pkgver" "$pkgrel"
 ''',
                 'sed': '''#!/bin/bash
@@ -90,7 +92,7 @@ exec /usr/bin/sed "$@"
             environment = {
                 **os.environ,
                 'PATH': f'{bin_dir}{os.pathsep}{os.environ["PATH"]}',
-                'CURRENT_VERSION': '1.8.2',
+                'CURRENT_VERSION': current_version,
                 'CURRENT_RELEASE': str(current_rel),
                 'LATEST_VERSION': latest_version,
             }
@@ -122,6 +124,18 @@ exec /usr/bin/sed "$@"
 
     def test_same_version_update_does_not_lower_higher_aur_pkgrel(self):
         package, metadata = self.run_update('8', template_rel='3')
+        self.assertIn('pkgrel=8', package)
+        self.assertIn('pkgrel = 8', metadata)
+
+    def test_stale_template_pkgrel_is_ignored_for_new_upstream_version(self):
+        package, metadata = self.run_update(
+            '1', current_version='1.8.3', template_version='1.8.2',
+            template_rel='2', latest_version='1.8.3')
+        self.assertIn('pkgrel=1', package)
+        self.assertIn('pkgrel = 1', metadata)
+
+    def test_indented_template_pkgrel_is_read(self):
+        package, metadata = self.run_update('2', template_rel='8', template_indent='  ')
         self.assertIn('pkgrel=8', package)
         self.assertIn('pkgrel = 8', metadata)
 

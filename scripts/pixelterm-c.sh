@@ -20,9 +20,10 @@ if [[ ! "$current_ver" =~ ^[0-9]+(\.[0-9]+)*$ || ! "$current_rel" =~ ^[0-9]+$ ]]
     echo "Invalid pkgver/pkgrel in AUR .SRCINFO" >&2
     exit 1
 fi
-template_rel=$(sed -n 's/^pkgrel=//p' PKGBUILD | head -n1)
-if [[ ! "$template_rel" =~ ^[0-9]+$ ]]; then
-    echo "Invalid pkgrel in PKGBUILD" >&2
+template_ver=$(sed -n 's/^[[:space:]]*pkgver=//p' PKGBUILD | head -n1)
+template_rel=$(sed -n 's/^[[:space:]]*pkgrel=//p' PKGBUILD | head -n1)
+if [[ ! "$template_ver" =~ ^[0-9]+(\.[0-9]+)*$ || ! "$template_rel" =~ ^[0-9]+$ ]]; then
+    echo "Invalid pkgver/pkgrel in PKGBUILD" >&2
     exit 1
 fi
 
@@ -61,7 +62,8 @@ if (( version_order > 0 )); then
     # New upstream version starts a fresh package release.
     sed -i "s/pkgrel=.*/pkgrel=1/" PKGBUILD
 else
-    if (( $(vercmp "$template_rel" "$current_rel") > 0 )); then
+    if (( $(vercmp "$template_ver" "$current_ver") == 0 )) &&
+       (( $(vercmp "$template_rel" "$current_rel") > 0 )); then
         current_rel=$template_rel
     fi
     # Keep the higher revision from the committed template or published AUR package.

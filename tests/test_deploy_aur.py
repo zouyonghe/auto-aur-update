@@ -147,6 +147,7 @@ fi
     def test_pr_validation_covers_publish_and_split_workflows(self):
         text = WORKFLOW.read_text()
         self.assertIn("      - 'scripts/pixelterm-c.sh'", text)
+        self.assertIn("      - 'build-aur-action/**'", text)
         self.assertIn("      - '.github/workflows/pixelterm-update.yml'", text)
         self.assertIn("      - '.github/workflows/astrbot-update.yml'", text)
         self.assertIn("      - '.github/workflows/task-sync.yml'", text)
@@ -169,7 +170,7 @@ fi
         astrbot_condition = (
             "github.ref == 'refs/heads/main' && "
             "(github.event_name == 'workflow_dispatch' || "
-            "(github.event_name == 'schedule' && github.event.schedule == '45 3 * * *'))"
+            "github.event_name == 'schedule')"
         )
         self.assertEqual(workflow_schedule_crons(pixelterm), ['30 2 * * *'])
         self.assertEqual(workflow_schedule_crons(astrbot_update), ['45 3 * * *'])
@@ -184,6 +185,7 @@ fi
         self.assertEqual(workflow_concurrency(task),
                          'group: auto-aur-update-sync cancel-in-progress: false')
         self.assertIn('workflow_dispatch:', pixelterm)
+        self.assertIn('actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683', pixelterm)
         self.assertNotIn('aur-update-queue', pixelterm)
         self.assertNotIn('PixelTerm-Rebuild-Requests', pixelterm)
         self.assertNotIn('needs:', pixelterm)

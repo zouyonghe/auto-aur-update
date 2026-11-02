@@ -17,7 +17,7 @@ jobs:
     if: >-
       github.ref == 'refs/heads/main' &&
       (github.event_name == 'workflow_dispatch' ||
-       (github.event_name == 'schedule' && github.event.schedule == '45 3 * * *'))
+       github.event_name == 'schedule')
     uses: ./.github/workflows/publish-astrbot-desktop-bin.yml
     with:
       source_sha: ${{ github.sha }}

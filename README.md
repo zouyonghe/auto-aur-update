@@ -7,9 +7,10 @@ Update the program in aur warehouse automatically
 `x86_64` and `aarch64`. PixelTerm-C keeps its existing updater and build action.
 
 - `.github/workflows/pixelterm-update.yml` updates PixelTerm-C at 02:30 UTC and supports a
-  manual dispatch. It serializes AUR publishes and is idempotent when the package is already
-  current. For a dependency ABI or packaging-only rebuild, increase `pkgrel` in the committed
-  `pixelterm-c/PKGBUILD` and dispatch the workflow; the change is explicit and reviewable.
+  manual dispatch and owner-only repository-watch trigger. It serializes AUR publishes and is
+  idempotent when the package is already current. For a dependency ABI or packaging-only rebuild,
+  increase `pkgrel` in the committed `pixelterm-c/PKGBUILD` and dispatch the workflow; the change
+  is explicit and reviewable.
 - `.github/workflows/astrbot-update.yml` updates AstrBot at 03:45 UTC and supports a manual
   dispatch. It calls `.github/workflows/publish-astrbot-desktop-bin.yml` as a reusable workflow.
 - `.github/workflows/task-sync.yml` keeps the repository Task sync independent from package
