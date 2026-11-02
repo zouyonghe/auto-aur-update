@@ -32,7 +32,7 @@ jobs:
         env:
           REQUEST_ID: ${{ github.run_id }}
           REQUEST_ATTEMPT: ${{ github.run_attempt }}
-        run: git push origin "HEAD:refs/heads/aur-update-queue/pixelterm-rebuild-${REQUEST_ID}-${REQUEST_ATTEMPT}"
+        run: timeout --signal=TERM 60s git push origin "HEAD:refs/heads/aur-update-queue/pixelterm-rebuild-${REQUEST_ID}-${REQUEST_ATTEMPT}"
 
   UpdatePkg:
     if: >-
@@ -61,22 +61,46 @@ jobs:
       - name: Detect queued PixelTerm rebuild requests
         id: rebuild_queue
         run: |
-          request_refs=$(git ls-remote --heads origin 'refs/heads/aur-update-queue/pixelterm-rebuild-*' | awk '{ print $2 }')
+          request_refs=$(timeout --signal=TERM 30s git ls-remote --heads origin 'refs/heads/aur-update-queue/pixelterm-rebuild-*' | awk '{ print $2 }' | sort -u)
           if [[ -n "$request_refs" ]]; then
-            echo 'pending=true' >> "$GITHUB_OUTPUT"
+            aur_dir=$(mktemp -d)
+            trap 'rm -rf "$aur_dir"' EXIT
+            aur_url=${PIXELTERM_AUR_REPO_URL:-https://aur.archlinux.org/pixelterm-c.git}
+            timeout --signal=TERM 60s git clone --quiet "$aur_url" "$aur_dir/package"
+            published_request_refs=$(timeout --signal=TERM 30s git -C "$aur_dir/package" log --all --format=%B \
+              | awk '/^PixelTerm-Rebuild-Requests:$/ { in_marker=1; next } in_marker && NF == 0 { in_marker=0 } in_marker { print }')
+            active_refs=''
+            while IFS= read -r request_ref; do
+              [[ -n "$request_ref" ]] || continue
+              if ! grep -Fqx -- "$request_ref" <<< "$published_request_refs"; then
+                active_refs+="$request_ref"$'\n'
+              fi
+            done <<< "$request_refs"
             {
+              echo 'pending=true'
               echo 'refs<<EOF'
               printf '%s\n' "$request_refs"
               echo EOF
+              echo 'active_refs<<EOF'
+              printf '%s' "$active_refs"
+              echo EOF
+              if [[ -n "$active_refs" ]]; then
+                echo 'rebuild_needed=true'
+              else
+                echo 'rebuild_needed=false'
+              fi
             } >> "$GITHUB_OUTPUT"
           else
-            echo 'pending=false' >> "$GITHUB_OUTPUT"
+            {
+              echo 'pending=false'
+              echo 'rebuild_needed=false'
+            } >> "$GITHUB_OUTPUT"
           fi
       - uses: ./build-aur-action
         with:
           pkgname: ${{ matrix.PKGBUILDs }}
           pkgdir: ${{ matrix.PKGBUILDs }}
-          rebuild_current: ${{ steps.rebuild_queue.outputs.pending == 'true' && 'true' || 'false' }}
+          rebuild_current: ${{ steps.rebuild_queue.outputs.rebuild_needed == 'true' && 'true' || 'false' }}
 
       - name: Publish AUR package
         uses: ./.github/actions/deploy-aur
@@ -86,7 +110,10 @@ jobs:
           commit_username: ${{ secrets.AUR_USERNAME }}
           commit_email: ${{ secrets.AUR_EMAIL }}
           ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
-          commit_message: Update AUR package
+          commit_message: |
+            Update AUR package
+            PixelTerm-Rebuild-Requests:
+            ${{ steps.rebuild_queue.outputs.refs }}
           ssh_keyscan_types: rsa,ecdsa,ed25519
           allow_empty_commits: false
       - name: Acknowledge published PixelTerm rebuild requests
@@ -96,7 +123,31 @@ jobs:
         run: |
           while IFS= read -r request_ref; do
             [[ -n "$request_ref" ]] || continue
-            git push origin ":$request_ref"
+            if ! remote_ref=$(timeout --signal=TERM 30s git ls-remote --heads origin "$request_ref"); then
+              echo "Failed to inspect queued ref $request_ref" >&2
+              exit 1
+            fi
+            [[ -n "$remote_ref" ]] || continue
+            deleted=false
+            for attempt in 1 2 3; do
+              if timeout --signal=TERM 60s git push origin ":$request_ref"; then
+                deleted=true
+                break
+              fi
+              if ! remote_ref=$(timeout --signal=TERM 30s git ls-remote --heads origin "$request_ref"); then
+                echo "Failed to verify cleanup for $request_ref" >&2
+                exit 1
+              fi
+              if [[ -z "$remote_ref" ]]; then
+                deleted=true
+                break
+              fi
+              sleep "$attempt"
+            done
+            if [[ "$deleted" != true ]]; then
+              echo "Failed to remove queued ref $request_ref after retries" >&2
+              exit 1
+            fi
           done <<< "$REQUEST_REFS"
 
   UpdateAstrBot:

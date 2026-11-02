@@ -223,13 +223,23 @@ fi
         self.assertIn('REQUEST_ID: ${{ github.run_id }}', rebuild_queue)
         self.assertIn('REQUEST_ATTEMPT: ${{ github.run_attempt }}', rebuild_queue)
         self.assertIn('HEAD:refs/heads/aur-update-queue/pixelterm-rebuild-${REQUEST_ID}-${REQUEST_ATTEMPT}', rebuild_queue)
+        self.assertIn('timeout --signal=TERM 60s git push origin "HEAD:refs/heads/aur-update-queue/', rebuild_queue)
         self.assertIn('needs: QueuePixelTermRebuild', pixelterm)
         self.assertIn("needs.QueuePixelTermRebuild.result == 'success'", pixelterm)
         self.assertIn('group: auto-aur-update-pixelterm-${{ matrix.PKGBUILDs }}', pixelterm)
         self.assertIn("git ls-remote --heads origin 'refs/heads/aur-update-queue/pixelterm-rebuild-*'", pixelterm)
-        self.assertIn("rebuild_current: ${{ steps.rebuild_queue.outputs.pending == 'true' && 'true' || 'false' }}", pixelterm)
+        self.assertIn("timeout --signal=TERM 30s git ls-remote --heads origin 'refs/heads/aur-update-queue/pixelterm-rebuild-*'", pixelterm)
+        self.assertIn('timeout --signal=TERM 60s git clone --quiet "$aur_url" "$aur_dir/package"', pixelterm)
+        self.assertIn('timeout --signal=TERM 30s git -C "$aur_dir/package" log --all --format=%B', pixelterm)
+        self.assertIn("awk '/^PixelTerm-Rebuild-Requests:$/", pixelterm)
+        self.assertIn('rebuild_current: ${{ steps.rebuild_queue.outputs.rebuild_needed == \'true\' && \'true\' || \'false\' }}', pixelterm)
+        self.assertIn('PixelTerm-Rebuild-Requests:', pixelterm)
+        self.assertIn("grep -Fqx -- \"$request_ref\" <<< \"$published_request_refs\"", pixelterm)
+        self.assertIn("git ls-remote --heads origin \"$request_ref\"", pixelterm)
         self.assertIn('REQUEST_REFS: ${{ steps.rebuild_queue.outputs.refs }}', pixelterm)
         self.assertIn('git push origin ":$request_ref"', pixelterm)
+        self.assertIn('timeout --signal=TERM 60s git push origin ":$request_ref"', pixelterm)
+        self.assertIn('for attempt in 1 2 3', pixelterm)
         publish_step = workflow_step(pixelterm, 'Publish AUR package')
         acknowledge_step = workflow_step(pixelterm, 'Acknowledge published PixelTerm rebuild requests')
         self.assertLess(pixelterm.index(publish_step), pixelterm.index(acknowledge_step))
@@ -267,16 +277,49 @@ fi
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             remote = root / 'origin.git'
+            aur_remote = root / 'aur.git'
+            aur_checkout = root / 'aur-checkout'
             checkout = root / 'checkout'
+            fake_bin = root / 'bin'
+            fake_bin.mkdir()
+            (fake_bin / 'timeout').write_text('''#!/bin/sh
+set -eu
+if [ "${1:-}" = "--signal=TERM" ]; then
+  shift 2
+fi
+exec "$@"
+''')
+            (fake_bin / 'timeout').chmod(0o755)
+            stale_ref = 'refs/heads/aur-update-queue/pixelterm-rebuild-7001-1'
+            active_ref = 'refs/heads/aur-update-queue/pixelterm-rebuild-7001-2'
+            second_active_ref = 'refs/heads/aur-update-queue/pixelterm-rebuild-7002-1'
+            later_ref = 'refs/heads/aur-update-queue/pixelterm-rebuild-7003-1'
             env = {
                 **os.environ,
                 'GIT_AUTHOR_NAME': 'Test',
                 'GIT_AUTHOR_EMAIL': 'test@example.org',
                 'GIT_COMMITTER_NAME': 'Test',
                 'GIT_COMMITTER_EMAIL': 'test@example.org',
+                'PATH': f'{fake_bin}{os.pathsep}{os.environ["PATH"]}',
+                'PIXELTERM_AUR_REPO_URL': str(aur_remote),
             }
             subprocess.run(['git', 'init', '--bare', '--initial-branch=main', str(remote)],
                            check=True, capture_output=True)
+            subprocess.run(['git', 'init', '--bare', '--initial-branch=master', str(aur_remote)],
+                           check=True, capture_output=True)
+            subprocess.run(['git', 'clone', str(aur_remote), str(aur_checkout)],
+                           check=True, capture_output=True)
+            marker_message = (
+                'Update AUR package\n'
+                f'{second_active_ref}\n\n'
+                'PixelTerm-Rebuild-Requests:\n'
+                f'{stale_ref}\n'
+                f'Request ID: {active_ref}\n'
+            )
+            subprocess.run(['git', '-C', str(aur_checkout), 'commit', '--allow-empty',
+                            '-m', marker_message], env=env, check=True, capture_output=True)
+            subprocess.run(['git', '-C', str(aur_checkout), 'push', 'origin', 'master'],
+                           env=env, check=True, capture_output=True)
             subprocess.run(['git', 'init', '--initial-branch=main', str(checkout)],
                            check=True, capture_output=True)
             subprocess.run(['git', 'remote', 'add', 'origin', str(remote)], cwd=checkout,
@@ -295,6 +338,20 @@ fi
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 return result
 
+            def output_block(output, name):
+                block = output.split(f'{name}<<EOF\n', 1)[1]
+                if block.startswith('EOF\n'):
+                    return ''
+                return block.split('\nEOF', 1)[0]
+
+            def publish_markers(refs):
+                message = 'Update AUR package\nPixelTerm-Rebuild-Requests:\n'
+                message += '\n'.join(refs) + '\n'
+                subprocess.run(['git', '-C', str(aur_checkout), 'commit', '--allow-empty',
+                                '-m', message], env=env, check=True, capture_output=True)
+                subprocess.run(['git', '-C', str(aur_checkout), 'push', 'origin', 'master'],
+                               env=env, check=True, capture_output=True)
+
             def queued_refs():
                 output = git_output('ls-remote', '--heads', 'origin',
                                     'refs/heads/aur-update-queue/pixelterm-rebuild-*',
@@ -308,38 +365,78 @@ fi
                 })
             first_snapshot = queued_refs()
             self.assertEqual(first_snapshot, [
-                'refs/heads/aur-update-queue/pixelterm-rebuild-7001-1',
-                'refs/heads/aur-update-queue/pixelterm-rebuild-7001-2',
-                'refs/heads/aur-update-queue/pixelterm-rebuild-7002-1',
+                stale_ref,
+                active_ref,
+                second_active_ref,
             ])
 
             output_file = root / 'github-output'
             run_workflow_script(detect, {'GITHUB_OUTPUT': str(output_file)})
             detected = output_file.read_text()
             self.assertIn('pending=true\n', detected)
-            snapshot_refs = detected.split('refs<<EOF\n', 1)[1].split('\nEOF', 1)[0]
+            snapshot_refs = output_block(detected, 'refs')
             self.assertEqual(snapshot_refs.splitlines(), first_snapshot)
+            self.assertEqual(output_block(detected, 'active_refs'),
+                             f'{active_ref}\n{second_active_ref}')
+            self.assertIn('rebuild_needed=true\n', detected)
 
             run_workflow_script(enqueue, {
                 'REQUEST_ID': '7003',
                 'REQUEST_ATTEMPT': '1',
             })
+            publish_markers(first_snapshot)
             run_workflow_script(acknowledge, {'REQUEST_REFS': snapshot_refs})
             self.assertEqual(queued_refs(), [
-                'refs/heads/aur-update-queue/pixelterm-rebuild-7003-1',
+                later_ref,
             ])
 
             output_file.write_text('')
             run_workflow_script(detect, {'GITHUB_OUTPUT': str(output_file)})
-            self.assertEqual(output_file.read_text(), 'pending=true\nrefs<<EOF\n'
-                             'refs/heads/aur-update-queue/pixelterm-rebuild-7003-1\nEOF\n')
+            detected = output_file.read_text()
+            self.assertIn('pending=true\n', detected)
+            self.assertEqual(output_block(detected, 'refs'), later_ref)
+            self.assertEqual(output_block(detected, 'active_refs'), later_ref)
+            self.assertIn('rebuild_needed=true\n', detected)
+
+            # Once the later request is present in AUR history, detection keeps it
+            # queued for acknowledgement but disables the rebuild increment.
+            publish_markers([later_ref])
+            output_file.write_text('')
+            run_workflow_script(detect, {'GITHUB_OUTPUT': str(output_file)})
+            detected = output_file.read_text()
+            self.assertIn('pending=true\n', detected)
+            self.assertEqual(output_block(detected, 'refs'), later_ref)
+            self.assertEqual(output_block(detected, 'active_refs'), '')
+            self.assertIn('rebuild_needed=false\n', detected)
+
             run_workflow_script(acknowledge, {
-                'REQUEST_REFS': 'refs/heads/aur-update-queue/pixelterm-rebuild-7003-1',
+                'REQUEST_REFS': later_ref,
             })
+            # A retry after a successful deletion is idempotent.
+            run_workflow_script(acknowledge, {'REQUEST_REFS': later_ref})
 
             output_file.write_text('')
             run_workflow_script(detect, {'GITHUB_OUTPUT': str(output_file)})
-            self.assertEqual(output_file.read_text(), 'pending=false\n')
+            self.assertEqual(output_file.read_text(), 'pending=false\nrebuild_needed=false\n')
+
+    def test_pixelterm_rebuild_queue_ack_failure_is_not_swallowed(self):
+        pixelterm = workflow_job(AUTO_UPDATE_WORKFLOW.read_text(), 'UpdatePkg')
+        acknowledge = workflow_step_run(
+            workflow_step(pixelterm, 'Acknowledge published PixelTerm rebuild requests'),
+            'Acknowledge published PixelTerm rebuild requests',
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            fake_bin = Path(directory)
+            (fake_bin / 'git').write_text('#!/bin/sh\nexit 99\n')
+            (fake_bin / 'git').chmod(0o755)
+            result = subprocess.run(
+                ['bash', '-e', '-o', 'pipefail', '-c', acknowledge],
+                env={**os.environ, 'PATH': f'{fake_bin}{os.pathsep}{os.environ["PATH"]}',
+                     'REQUEST_REFS': 'refs/heads/aur-update-queue/pixelterm-rebuild-test-1'},
+                text=True,
+                capture_output=True,
+            )
+            self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_pr_and_publish_workflows_call_shared_build_pipeline(self):
         self.assertTrue(BUILD_WORKFLOW.is_file())
@@ -583,6 +680,7 @@ class FinalPackageTests(unittest.TestCase):
             (root / '.SRCINFO').write_text(metadata)
             (root / 'helper.sh').write_text('original asset')
             git('add', '.')
+            git('add', '-f', 'helper.sh')
             git('commit', '-qm', 'initial')
             original = git('rev-parse', 'HEAD').strip()
             if change == 'asset':

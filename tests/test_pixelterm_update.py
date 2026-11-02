@@ -11,7 +11,8 @@ SCRIPT = ROOT / 'scripts/pixelterm-c.sh'
 
 
 class PixelTermUpdateTests(unittest.TestCase):
-    def run_update(self, current_rel, *, rebuild=False, latest_version='1.8.2'):
+    def run_update(self, current_rel, *, template_rel='1', rebuild=False,
+                   latest_version='1.8.2', expect_success=True):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             bin_dir = root / 'bin'
@@ -22,7 +23,7 @@ class PixelTermUpdateTests(unittest.TestCase):
             scripts_dir.mkdir()
             source_archive = root / 'source.tar.gz'
             (package_dir / 'PKGBUILD').write_text(
-                f'pkgver=1.8.2\npkgrel=1\nsha256sums=(\'old\')\n'
+                f'pkgver=1.8.2\npkgrel={template_rel}\nsha256sums=(\'old\')\n'
             )
             script = SCRIPT.read_text().replace('/tmp/pixelterm-c.tar.gz', str(source_archive))
             (scripts_dir / SCRIPT.name).write_text(script)
@@ -49,7 +50,19 @@ fi
 printf 'v%s\\n' "$LATEST_VERSION"
 ''',
                 'vercmp': '''#!/bin/bash
-if [[ $1 == "$2" ]]; then echo 0; else echo 1; fi
+IFS=. read -ra left <<< "$1"
+IFS=. read -ra right <<< "$2"
+max=${#left[@]}
+if (( ${#right[@]} > max )); then max=${#right[@]}; fi
+for ((i = 0; i < max; i++)); do
+  l=${left[i]:-0}
+  r=${right[i]:-0}
+  l=$((10#$l))
+  r=$((10#$r))
+  if (( l > r )); then echo 1; exit; fi
+  if (( l < r )); then echo -1; exit; fi
+done
+echo 0
 ''',
                 'makepkg': '''#!/bin/bash
 set -eu
@@ -89,7 +102,11 @@ exec /usr/bin/sed "$@"
                 text=True,
                 capture_output=True,
             )
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            if expect_success:
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            else:
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                return result, None, None
             package = (package_dir / 'PKGBUILD').read_text()
             metadata = (package_dir / '.SRCINFO').read_text()
             return package, metadata
@@ -115,11 +132,20 @@ exec /usr/bin/sed "$@"
         self.assertIn('pkgrel=8', package)
         self.assertIn('pkgrel = 8', metadata)
 
+    def test_requested_rebuild_increments_higher_template_pkgrel(self):
+        package, metadata = self.run_update('2', template_rel='8', rebuild=True)
+        self.assertIn('pkgrel=9', package)
+        self.assertIn('pkgrel = 9', metadata)
+
     def test_new_upstream_version_starts_at_pkgrel_one(self):
         package, metadata = self.run_update('8', rebuild=True, latest_version='1.9.0')
         self.assertIn('pkgver=1.9.0', package)
         self.assertIn('pkgrel=1', package)
         self.assertIn('pkgrel = 1', metadata)
+
+    def test_older_upstream_version_is_rejected(self):
+        result, _, _ = self.run_update('8', latest_version='1.8.1', expect_success=False)
+        self.assertIn('older than AUR version', result.stderr)
 
 
 if __name__ == '__main__':

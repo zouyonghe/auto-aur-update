@@ -20,6 +20,57 @@ if [[ ! "$current_ver" =~ ^[0-9]+(\.[0-9]+)*$ || ! "$current_rel" =~ ^[0-9]+$ ]]
     echo "Invalid pkgver/pkgrel in AUR .SRCINFO" >&2
     exit 1
 fi
+template_rel=$(sed -n 's/^[[:space:]]*pkgrel[[:space:]]*=[[:space:]]*//p' PKGBUILD | head -n1)
+if [[ ! "$template_rel" =~ ^[0-9]+$ ]]; then
+    echo "Invalid pkgrel in PKGBUILD" >&2
+    exit 1
+fi
+
+normalize_decimal() {
+    local value=$1
+    value=${value#"${value%%[!0]*}"}
+    printf '%s' "${value:-0}"
+}
+
+decimal_compare() {
+    local left right
+    left=$(normalize_decimal "$1")
+    right=$(normalize_decimal "$2")
+    if (( ${#left} > ${#right} )); then
+        printf '1'
+    elif (( ${#left} < ${#right} )); then
+        printf '%s' '-1'
+    elif [[ "$left" == "$right" ]]; then
+        printf '0'
+    elif [[ "$left" > "$right" ]]; then
+        printf '1'
+    else
+        printf '%s' '-1'
+    fi
+}
+
+increment_decimal() {
+    local value next digit i
+    value=$(normalize_decimal "$1")
+    next=''
+    local carry=1
+    for ((i = ${#value} - 1; i >= 0; i--)); do
+        digit=${value:i:1}
+        if (( carry )); then
+            if [[ "$digit" == 9 ]]; then
+                digit=0
+            else
+                digit=$((digit + 1))
+                carry=0
+            fi
+        fi
+        next="${digit}${next}"
+    done
+    if (( carry )); then
+        next="1${next}"
+    fi
+    printf '%s' "$next"
+}
 
 # 获取 GitHub 最新版本号
 latest_ver=$(curl --fail --silent --show-error --location https://api.github.com/repos/zouyonghe/PixelTerm-C/releases/latest \
@@ -58,26 +109,10 @@ if (( version_order > 0 )); then
 else
     if [[ "${REBUILD_CURRENT:-false}" == true ]]; then
         # Increment as decimal digits to avoid shell integer overflow and octal parsing.
-        current_rel=${current_rel#"${current_rel%%[!0]*}"}
-        current_rel=${current_rel:-0}
-        next_rel=''
-        carry=1
-        for ((i = ${#current_rel} - 1; i >= 0; i--)); do
-            digit=${current_rel:i:1}
-            if (( carry )); then
-                if [[ "$digit" == 9 ]]; then
-                    digit=0
-                else
-                    digit=$((digit + 1))
-                    carry=0
-                fi
-            fi
-            next_rel="$digit$next_rel"
-        done
-        if (( carry )); then
-            next_rel="1$next_rel"
+        if (( $(decimal_compare "$template_rel" "$current_rel") > 0 )); then
+            current_rel=$template_rel
         fi
-        current_rel=$next_rel
+        current_rel=$(increment_decimal "$current_rel")
     fi
     # Keep the template aligned with published metadata without lowering pkgrel.
     sed -i "s/pkgrel=.*/pkgrel=$current_rel/" PKGBUILD
