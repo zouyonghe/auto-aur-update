@@ -3,7 +3,8 @@ on:
   watch:
     types: [started]
   schedule:
-  - cron: "30 2 * * *"
+    - cron: "30 2 * * *"
+    - cron: "45 3 * * *"
   workflow_dispatch:
     inputs:
       rebuild_current:
@@ -20,11 +21,13 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # This workflow contains a single job called "build"
-
-
-
   UpdatePkg:
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'watch' &&
+        github.event.repository.owner.id == github.event.sender.id) ||
+       (github.event_name == 'schedule' && github.event.schedule == '30 2 * * *'))
     strategy:
       fail-fast: false
       matrix:
@@ -32,8 +35,6 @@ jobs:
         - pixelterm-c
 
     runs-on: ubuntu-latest
-#    if: github.event.repository.owner.id == github.event.sender.id  # 自己点的 start
-
 
     steps:
       - uses: actions/checkout@v4
@@ -55,7 +56,23 @@ jobs:
           ssh_keyscan_types: rsa,ecdsa,ed25519
           allow_empty_commits: false
 
+  UpdateAstrBot:
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'schedule' && github.event.schedule == '45 3 * * *'))
+    uses: ./.github/workflows/publish-astrbot-desktop-bin.yml
+    with:
+      source_sha: ${{ github.sha }}
+    secrets: inherit
+
   Task:
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'watch' &&
+        github.event.repository.owner.id == github.event.sender.id) ||
+       (github.event_name == 'schedule' && github.event.schedule == '30 2 * * *'))
     runs-on: ubuntu-latest
     steps:
     - name: Checkout
@@ -64,7 +81,7 @@ jobs:
         fetch-depth: 0
     - name: Make Time log #Api调用
       run: |
-        echo `date +"%Y-%m-%d %H:%M:%S"` begin > time.log
+        echo "$(date +'%Y-%m-%d %H:%M:%S') begin" > time.log
     - name: Commit #上传新的refresh_token到仓库
       run: |
         git config --local user.email 1259085392z@gmail.com

@@ -4,18 +4,21 @@ Update the program in aur warehouse automatically
 ## AstrBot desktop
 
 `astrbot-desktop-bin` repackages the official stable Debian binaries for
-`x86_64` and `aarch64`. PixelTerm-C uses its existing, separate workflow.
+`x86_64` and `aarch64`. PixelTerm-C keeps its existing updater and build action.
 
-- `.github/workflows/publish-astrbot-desktop-bin.yml` publishes daily or after a successful `main` validation run.
-- `.github/workflows/astrbot-desktop-bin.yml` validates pull requests and manual runs without AUR credentials.
+- `.github/workflows/main.yml` is the top-level scheduled and manual update flow. PixelTerm-C remains scheduled at 02:30 UTC; AstrBot runs at 03:45 UTC.
+- Manually dispatch `main.yml` on the `main` branch to run both package updates and the existing Task sync. The package jobs run independently, so a package update failure does not skip Task sync.
+- `main.yml` calls `.github/workflows/publish-astrbot-desktop-bin.yml` as a reusable workflow for the AstrBot update. Pull requests are validated by `.github/workflows/astrbot-desktop-bin.yml` without AUR credentials.
+- The PixelTerm-C and Task jobs also retain their owner-only repository-watch trigger. Package publishing requires `main`.
 - The updater requires both release assets and their GitHub SHA256 digests;
   makepkg downloads and verifies the actual files before publishing.
 - New upstream versions normally start at `pkgrel=1`, unless the template
   intentionally specifies a higher revision. Existing same-version AUR revisions are never lowered.
   For packaging-only changes, bump `pkgrel` in the committed template.
-- PRs run tests and both repackaging builds without AUR credentials. Only
-  scheduled/manual runs on `main` publish using the existing `AUR_USERNAME`,
-  `AUR_EMAIL`, and `AUR_SSH_PRIVATE_KEY` secrets. No binaries are pushed to AUR.
+- PRs run tests and both repackaging builds without AUR credentials. Scheduled
+  and manually dispatched runs on `main` publish using the existing
+  `AUR_USERNAME`, `AUR_EMAIL`, and `AUR_SSH_PRIVATE_KEY` secrets. No binaries
+  are pushed to AUR.
 - Preparation records the AUR Git commit alongside the generated PKGBUILD.
   Deployment aborts if that snapshot changed; it never rebases stale packaging
   over another maintainer's update. Rerun the workflow to prepare fresh inputs.

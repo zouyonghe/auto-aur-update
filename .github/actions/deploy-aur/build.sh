@@ -51,7 +51,12 @@ fi
 [[ -n "$host_keys" ]] || { echo 'AUR SSH host scan returned no keys.' >&2; exit 1; }
 : > ~/.ssh/known_hosts
 while IFS= read -r host_key; do
-  fingerprint=$(printf '%s\n' "$host_key" | ssh-keygen -lf - -E sha256 | awk '{print $2}')
+  read -r _ key_type key_data _ <<< "$host_key"
+  [[ -n "${key_type:-}" && -n "${key_data:-}" ]] || {
+    echo 'AUR SSH host scan returned a malformed key.' >&2
+    exit 1
+  }
+  fingerprint=$(printf '%s %s\n' "$key_type" "$key_data" | ssh-keygen -lf - -E sha256 | awk '{print $2}')
   case "$fingerprint" in
     SHA256:RFzBCUItH9LZS0cKB5UE6ceAYhBD5C8GeOBip8Z11+4|SHA256:uTa/0PndEgPZTf76e1DFqXKJEXKsn7m9ivhLQtzGOCI|SHA256:5s5cIyReIfNNVGRFdDbe3hdYiI5OelHGpw2rOUud3Q8)
       printf '%s\n' "$host_key" >> ~/.ssh/known_hosts ;;

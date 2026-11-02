@@ -1,4 +1,5 @@
 name: 'Build AUR Package'
+description: 'Prepare and build an AUR package from its PKGBUILD.'
 branding:
   icon: user-check
   color: gray-dark

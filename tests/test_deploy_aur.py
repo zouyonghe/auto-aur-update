@@ -8,6 +8,7 @@ import unittest
 WORKFLOW = Path(__file__).resolve().parents[1] / '.github/workflows/astrbot-desktop-bin.yml'
 PUBLISH_WORKFLOW = Path(__file__).resolve().parents[1] / '.github/workflows/publish-astrbot-desktop-bin.yml'
 BUILD_WORKFLOW = Path(__file__).resolve().parents[1] / '.github/workflows/build-astrbot-desktop-bin.yml'
+AUTO_UPDATE_WORKFLOW = Path(__file__).resolve().parents[1] / '.github/workflows/main.yml'
 
 SCRIPT = Path(__file__).resolve().parents[1] / '.github/actions/deploy-aur/build.sh'
 SSH_CONFIG = Path(__file__).resolve().parents[1] / '.github/actions/deploy-aur/ssh_config'
@@ -109,20 +110,29 @@ fi
 
     def test_pr_validation_covers_publish_and_shared_workflows(self):
         text = WORKFLOW.read_text()
+        self.assertIn("      - '.github/workflows/main.yml'", text)
         self.assertIn("      - '.github/workflows/publish-astrbot-desktop-bin.yml'", text)
         self.assertIn("      - '.github/workflows/build-astrbot-desktop-bin.yml'", text)
 
-    def test_manual_publish_uses_trusted_workflow_run(self):
-        validation = WORKFLOW.read_text()
+    def test_main_workflow_unifies_package_updates_and_general_sync(self):
+        main = AUTO_UPDATE_WORKFLOW.read_text()
         publish = PUBLISH_WORKFLOW.read_text()
-        self.assertIn('workflow_dispatch:', validation)
-        self.assertNotIn('workflow_dispatch:', publish)
-        self.assertIn('workflow_run:', publish)
-        self.assertIn("workflows: ['Update AstrBot AUR package']", publish)
-        self.assertIn("github.event.workflow_run.head_branch == 'main'", publish)
-        self.assertIn('github.event.workflow_run.head_repository.full_name == github.repository', publish)
-        self.assertIn("github.event.workflow_run.conclusion == 'success'", publish)
-        self.assertIn('source_sha: ${{ github.event_name == \'workflow_run\' && github.event.workflow_run.head_sha || github.sha }}', publish)
+        validation = WORKFLOW.read_text()
+        self.assertIn('workflow_dispatch:', main)
+        self.assertIn('cron: "30 2 * * *"', main)
+        self.assertIn('cron: "45 3 * * *"', main)
+        self.assertIn("github.event.schedule == '30 2 * * *'", main)
+        self.assertIn("github.event.schedule == '45 3 * * *'", main)
+        self.assertIn('github.event.repository.owner.id == github.event.sender.id', main)
+        self.assertIn('  UpdatePkg:', main)
+        self.assertIn('  UpdateAstrBot:', main)
+        self.assertIn('uses: ./.github/workflows/publish-astrbot-desktop-bin.yml', main)
+        self.assertIn('secrets: inherit', main)
+        self.assertIn('  Task:', main)
+        self.assertIn('workflow_call:', publish)
+        self.assertIn('source_sha: ${{ inputs.source_sha }}', publish)
+        self.assertNotIn('workflow_run:', publish)
+        self.assertNotIn('workflow_dispatch:', validation)
 
     def test_pr_and_publish_workflows_call_shared_build_pipeline(self):
         self.assertTrue(BUILD_WORKFLOW.is_file())
@@ -271,7 +281,7 @@ class DeploymentTests(unittest.TestCase):
             (root / '.ssh').mkdir()
             subprocess.run(['ssh-keygen', '-q', '-t', 'ed25519', '-N', '', '-f', str(root / 'rogue')], check=True)
             scan = root / 'ssh-keyscan'
-            scan.write_text('#!/bin/sh\ncat "$HOME/rogue.pub"\n')
+            scan.write_text('#!/bin/sh\nprintf "aur.archlinux.org "\ncat "$HOME/rogue.pub"\n')
             scan.chmod(0o755)
             block = section("echo '::group::Adding aur.archlinux.org to known hosts'",
                             "echo '::group::Importing private key'")
@@ -281,6 +291,32 @@ class DeploymentTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn('Unrecognized AUR SSH host fingerprint', result.stderr)
             self.assertEqual((root / '.ssh/known_hosts').read_text(), '')
+
+    def test_scanned_known_hosts_line_is_fingerprinted_and_preserved(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / '.ssh').mkdir()
+            public_key = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeKeyMaterialForRegressionTest'
+            host_key = f'aur.archlinux.org {public_key}'
+            scan = root / 'ssh-keyscan'
+            scan.write_text(f'#!/bin/sh\nprintf "%s\\n" "{host_key}"\n')
+            scan.chmod(0o755)
+            keygen = root / 'ssh-keygen'
+            keygen.write_text(f'''#!/bin/sh
+set -eu
+input=$(cat)
+[ "$input" = "{public_key}" ] || {{ echo 'host field was not removed' >&2; exit 1; }}
+echo '256 SHA256:RFzBCUItH9LZS0cKB5UE6ceAYhBD5C8GeOBip8Z11+4 aur'
+''')
+            keygen.chmod(0o755)
+            block = section("echo '::group::Adding aur.archlinux.org to known hosts'",
+                            "echo '::group::Importing private key'")
+            result = subprocess.run(['bash', '-c', 'set -euo pipefail\nssh_keyscan_types=ed25519\n' + block],
+                                    text=True, capture_output=True,
+                                    env={**os.environ, 'HOME': str(root),
+                                         'PATH': str(root) + os.pathsep + os.environ['PATH']})
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual((root / '.ssh/known_hosts').read_text(), host_key + '\n')
 
 
 class FinalPackageTests(unittest.TestCase):
