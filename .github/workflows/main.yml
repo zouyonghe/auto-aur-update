@@ -18,21 +18,17 @@ permissions:
 
 jobs:
   QueuePixelTermRebuild:
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      github.event_name == 'workflow_dispatch' &&
+      inputs.rebuild_current == true
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        if: >-
-          github.ref == 'refs/heads/main' &&
-          github.event_name == 'workflow_dispatch' &&
-          inputs.rebuild_current == true
         with:
           ref: main
           fetch-depth: 0
       - name: Queue durable PixelTerm rebuild request
-        if: >-
-          github.ref == 'refs/heads/main' &&
-          github.event_name == 'workflow_dispatch' &&
-          inputs.rebuild_current == true
         env:
           REQUEST_ID: ${{ github.run_id }}
           REQUEST_ATTEMPT: ${{ github.run_attempt }}
@@ -40,8 +36,9 @@ jobs:
 
   UpdatePkg:
     if: >-
-      always() &&
-      needs.QueuePixelTermRebuild.result == 'success' &&
+      !cancelled() &&
+      (needs.QueuePixelTermRebuild.result == 'success' ||
+       needs.QueuePixelTermRebuild.result == 'skipped') &&
       github.ref == 'refs/heads/main' &&
       (github.event_name == 'workflow_dispatch' ||
        (github.event_name == 'watch' &&

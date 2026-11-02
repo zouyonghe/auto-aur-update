@@ -5,6 +5,7 @@ on:
     paths:
       - 'astrbot-desktop-bin/**'
       - 'scripts/astrbot-desktop-bin.py'
+      - 'scripts/pixelterm-c.sh'
       - 'tests/**'
       - '.github/workflows/astrbot-desktop-bin.yml'
       - '.github/workflows/main.yml'

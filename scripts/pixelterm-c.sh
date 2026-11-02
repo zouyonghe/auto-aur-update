@@ -56,12 +56,31 @@ if (( version_order > 0 )); then
     # New upstream version starts a fresh package release.
     sed -i "s/pkgrel=.*/pkgrel=1/" PKGBUILD
 else
+    if [[ "${REBUILD_CURRENT:-false}" == true ]]; then
+        # Increment as decimal digits to avoid shell integer overflow and octal parsing.
+        current_rel=${current_rel#"${current_rel%%[!0]*}"}
+        current_rel=${current_rel:-0}
+        next_rel=''
+        carry=1
+        for ((i = ${#current_rel} - 1; i >= 0; i--)); do
+            digit=${current_rel:i:1}
+            if (( carry )); then
+                if [[ "$digit" == 9 ]]; then
+                    digit=0
+                else
+                    digit=$((digit + 1))
+                    carry=0
+                fi
+            fi
+            next_rel="$digit$next_rel"
+        done
+        if (( carry )); then
+            next_rel="1$next_rel"
+        fi
+        current_rel=$next_rel
+    fi
     # Keep the template aligned with published metadata without lowering pkgrel.
     sed -i "s/pkgrel=.*/pkgrel=$current_rel/" PKGBUILD
-    if [[ "${REBUILD_CURRENT:-false}" == true ]] && (( current_rel < 2 )); then
-        # Opt-in, idempotent one-time rebuild for dependency ABI changes.
-        sed -i "s/pkgrel=.*/pkgrel=2/" PKGBUILD
-    fi
 fi
 
 # 手动计算源码包校验和，避免 updpkgsums 的 bug

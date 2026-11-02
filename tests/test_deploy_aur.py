@@ -29,6 +29,24 @@ def workflow_job_condition(job, name):
     return ' '.join(match.group(1).split())
 
 
+def workflow_schedule_crons(text):
+    on_match = re.search(r'(?ms)^on:\n(.*?)(?=^[A-Za-z][\w-]*:|\Z)', text)
+    if on_match is None:
+        raise AssertionError('Missing workflow triggers')
+    schedule_match = re.search(
+        r'(?m)^  schedule:\n((?:^    .*\n|^      .*\n)+)', on_match.group(1))
+    if schedule_match is None:
+        raise AssertionError('Missing scheduled triggers')
+    return re.findall(r'(?m)^    - cron: "([^"]+)"$', schedule_match.group(1))
+
+
+def workflow_job_concurrency(job, name):
+    match = re.search(r'(?m)^    concurrency:\n((?:^      .*\n)+)', job)
+    if match is None:
+        raise AssertionError(f'Missing concurrency block for workflow job: {name}')
+    return ' '.join(match.group(1).split())
+
+
 def workflow_step(job, name):
     match = re.search(
         rf'(?ms)^      - name: {re.escape(name)}\n(.*?)(?=^      - |\Z)', job)
@@ -153,6 +171,7 @@ fi
 
     def test_pr_validation_covers_publish_and_shared_workflows(self):
         text = WORKFLOW.read_text()
+        self.assertIn("      - 'scripts/pixelterm-c.sh'", text)
         self.assertIn("      - '.github/workflows/main.yml'", text)
         self.assertIn("      - '.github/workflows/publish-astrbot-desktop-bin.yml'", text)
         self.assertIn("      - '.github/workflows/build-astrbot-desktop-bin.yml'", text)
@@ -166,10 +185,14 @@ fi
         astrbot = workflow_job(main, 'UpdateAstrBot')
         task = workflow_job(main, 'Task')
         self.assertIn('workflow_dispatch:', main)
-        self.assertIn('cron: "30 2 * * *"', main)
-        self.assertIn('cron: "45 3 * * *"', main)
+        self.assertEqual(workflow_schedule_crons(main), ['30 2 * * *', '45 3 * * *'])
+        queue_condition = (
+            "github.ref == 'refs/heads/main' && "
+            "github.event_name == 'workflow_dispatch' && inputs.rebuild_current == true"
+        )
         pixelterm_condition = (
-            "always() && needs.QueuePixelTermRebuild.result == 'success' && github.ref == 'refs/heads/main' && "
+            "!cancelled() && (needs.QueuePixelTermRebuild.result == 'success' || "
+            "needs.QueuePixelTermRebuild.result == 'skipped') && github.ref == 'refs/heads/main' && "
             "(github.event_name == 'workflow_dispatch' || "
             "(github.event_name == 'watch' && github.event.repository.owner.id == github.event.sender.id) || "
             "(github.event_name == 'schedule' && github.event.schedule == '30 2 * * *'))"
@@ -185,6 +208,8 @@ fi
             "(github.event_name == 'workflow_dispatch' || "
             "(github.event_name == 'schedule' && github.event.schedule == '45 3 * * *'))"
         )
+        self.assertEqual(workflow_job_condition(rebuild_queue, 'QueuePixelTermRebuild'), queue_condition)
+        self.assertNotRegex(rebuild_queue, r'(?m)^        if:')
         self.assertEqual(workflow_job_condition(pixelterm, 'UpdatePkg'), pixelterm_condition)
         self.assertEqual(workflow_job_condition(astrbot, 'UpdateAstrBot'), astrbot_condition)
         self.assertEqual(workflow_job_condition(task, 'Task'), task_condition)
@@ -195,8 +220,6 @@ fi
         )
         self.assertIsNotNone(concurrency)
         self.assertEqual(concurrency.group(1), 'auto-aur-update-pixelterm-${{ matrix.PKGBUILDs }}')
-        self.assertIn('github.event_name == \'workflow_dispatch\'', rebuild_queue)
-        self.assertIn('inputs.rebuild_current == true', rebuild_queue)
         self.assertIn('REQUEST_ID: ${{ github.run_id }}', rebuild_queue)
         self.assertIn('REQUEST_ATTEMPT: ${{ github.run_attempt }}', rebuild_queue)
         self.assertIn('HEAD:refs/heads/aur-update-queue/pixelterm-rebuild-${REQUEST_ID}-${REQUEST_ATTEMPT}', rebuild_queue)
@@ -212,8 +235,10 @@ fi
         self.assertLess(pixelterm.index(publish_step), pixelterm.index(acknowledge_step))
         self.assertIn("if: steps.rebuild_queue.outputs.pending == 'true'", acknowledge_step)
         self.assertNotRegex(acknowledge_step, r'(?m)^        if:.*(?:always|failure|cancelled)\(')
-        self.assertIn('group: auto-aur-update-astrbot', main)
-        self.assertIn('group: auto-aur-update-sync', main)
+        self.assertEqual(workflow_job_concurrency(astrbot, 'UpdateAstrBot'),
+                         'group: auto-aur-update-astrbot cancel-in-progress: false')
+        self.assertEqual(workflow_job_concurrency(task, 'Task'),
+                         'group: auto-aur-update-sync cancel-in-progress: false')
         self.assertIn('uses: ./.github/workflows/publish-astrbot-desktop-bin.yml', main)
         self.assertIn('secrets: inherit', main)
         self.assertNotIn('\n    needs:', task)

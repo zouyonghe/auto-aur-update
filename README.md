@@ -13,6 +13,8 @@ Update the program in aur warehouse automatically
 - A manual PixelTerm-C rebuild request is stored as a unique Git ref and remains queued if its
   run is replaced or publishing fails. The next serialized PixelTerm update rebuilds the current
   AUR version and removes only the requests it observed after publishing succeeds.
+  Requests observed together share one rebuild. If publishing succeeds but ref cleanup fails,
+  a later update may rebuild again and increment `pkgrel` a second time.
 - The updater requires both release assets and their GitHub SHA256 digests;
   makepkg downloads and verifies the actual files before publishing.
 - New upstream versions normally start at `pkgrel=1`, unless the template
