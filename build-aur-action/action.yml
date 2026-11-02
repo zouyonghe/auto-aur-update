@@ -10,9 +10,14 @@ inputs:
   pkgname:
     description: 'AUR package / repository name'
     required: true
+  rebuild_current:
+    description: 'Deprecated: true is rejected; commit the target pkgver and a higher pkgrel instead'
+    required: false
+    default: 'false'
 runs:
   using: 'docker'
   image: 'Dockerfile'
   args:
     - ${{ inputs.pkgdir }}
     - ${{ inputs.pkgname }}
+    - ${{ inputs.rebuild_current }}

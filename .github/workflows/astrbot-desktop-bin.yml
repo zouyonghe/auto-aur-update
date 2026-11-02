@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'astrbot-desktop-bin/**'
+      - 'pixelterm-c/**'
       - 'scripts/astrbot-desktop-bin.py'
       - 'scripts/pixelterm-c.sh'
       - 'tests/**'

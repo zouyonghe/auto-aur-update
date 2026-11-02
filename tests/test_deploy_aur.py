@@ -145,7 +145,11 @@ fi
                 self.assertIn("github.ref == 'refs/heads/main'", body)
 
     def test_pr_validation_covers_publish_and_split_workflows(self):
-        text = WORKFLOW.read_text()
+        paths = re.search(r'(?m)^  pull_request:\n    paths:\n((?:      - .*\n)+)',
+                          WORKFLOW.read_text())
+        self.assertIsNotNone(paths)
+        text = paths.group(1)
+        self.assertIn("      - 'pixelterm-c/**'", text)
         self.assertIn("      - 'scripts/pixelterm-c.sh'", text)
         self.assertIn("      - 'build-aur-action/**'", text)
         self.assertIn("      - '.github/workflows/pixelterm-update.yml'", text)
