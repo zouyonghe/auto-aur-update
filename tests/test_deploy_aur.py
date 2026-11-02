@@ -183,11 +183,11 @@ fi
         self.assertEqual(workflow_job_condition(workflow_job(astrbot_update, 'update'), 'update'), astrbot_condition)
         self.assertEqual(workflow_job_condition(workflow_job(task, 'sync'), 'sync'), pixelterm_condition)
         self.assertEqual(workflow_concurrency(pixelterm),
-                         'group: auto-aur-update-pixelterm cancel-in-progress: false')
+                         'group: auto-aur-update-pixelterm-${{ github.ref }} cancel-in-progress: false')
         self.assertEqual(workflow_concurrency(astrbot_update),
-                         'group: auto-aur-update-astrbot cancel-in-progress: false')
+                         'group: auto-aur-update-astrbot-${{ github.ref }} cancel-in-progress: false')
         self.assertEqual(workflow_concurrency(task),
-                         'group: auto-aur-update-sync cancel-in-progress: false')
+                         'group: auto-aur-update-sync-${{ github.ref }} cancel-in-progress: false')
         self.assertIn('workflow_dispatch:', pixelterm)
         self.assertIn('actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683', pixelterm)
         self.assertNotIn('aur-update-queue', pixelterm)
@@ -204,6 +204,22 @@ fi
         self.assertIn('source_sha: ${{ inputs.source_sha }}', publish)
         self.assertNotIn('workflow_run:', publish)
         self.assertIn('timeout-minutes: 20', publish)
+
+    def test_non_main_dispatch_cannot_replace_pending_main_updates(self):
+        main_groups = []
+        for workflow in (PIXELTERM_WORKFLOW, ASTRBOT_UPDATE_WORKFLOW, TASK_WORKFLOW):
+            with self.subTest(workflow=workflow.name):
+                concurrency = workflow_concurrency(workflow.read_text())
+                group = concurrency.removeprefix('group: ').removesuffix(' cancel-in-progress: false')
+                self.assertIn('${{ github.ref }}', group)
+                main_group = group.replace('${{ github.ref }}', 'refs/heads/main')
+                feature_group = group.replace('${{ github.ref }}', 'refs/heads/feature')
+                self.assertNotEqual(main_group, feature_group)
+                # The group uses only the ref, so scheduled/manual runs on main
+                # share one queue regardless of their event or run ID.
+                self.assertNotIn('${{', main_group)
+                main_groups.append(main_group)
+        self.assertEqual(len(set(main_groups)), 3)
 
     def test_pr_and_publish_workflows_call_shared_build_pipeline(self):
         self.assertTrue(BUILD_WORKFLOW.is_file())

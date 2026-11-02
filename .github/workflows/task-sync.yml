@@ -11,7 +11,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: auto-aur-update-sync
+  group: auto-aur-update-sync-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:

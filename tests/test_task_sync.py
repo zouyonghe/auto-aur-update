@@ -12,9 +12,11 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / '.github/workflows/task-sync.yml'
 
 
-def task_sync_script():
+def task_sync_script(*, commit_only=False):
     """Execute the workflow's commit and publication steps, not a copied script."""
     publication = WORKFLOW.read_text().split('      - name: Commit refresh token changes\n', 1)[1]
+    if commit_only:
+        publication = publication.split('      - name:', 1)[0]
     blocks = re.findall(r'(?m)^        run: (?:\|\n((?:^          .*\n)+)|([^\n]+))', publication)
     return 'set -euo pipefail\n' + '\n'.join(
         textwrap.dedent(multiline) if multiline else singleline
@@ -42,7 +44,8 @@ class TaskSyncTests(unittest.TestCase):
         self.git('clone', str(self.remote), str(seed))
         self.configure_identity(seed)
         (seed / 'time.log').write_text('original\n')
-        self.git('add', 'time.log', cwd=seed)
+        (seed / 'unrelated.txt').write_text('original unrelated content\n')
+        self.git('add', 'time.log', 'unrelated.txt', cwd=seed)
         self.git('commit', '-m', 'seed', cwd=seed)
         self.git('push', 'origin', 'main', cwd=seed)
         for checkout in (self.runner, self.writer):
@@ -97,11 +100,11 @@ exec "$REAL_GIT" "$@"
         self.git('config', 'user.email', 'test@example.org', cwd=checkout)
         self.git('config', 'user.name', 'Test', cwd=checkout)
 
-    def run_sync(self, *, changed=True, race='none'):
+    def run_sync(self, *, changed=True, race='none', commit_only=False):
         if changed:
             (self.runner / 'time.log').write_text('new timestamp\n')
         return subprocess.run(
-            ['bash', '-c', task_sync_script()], cwd=self.runner,
+            ['bash', '-c', task_sync_script(commit_only=commit_only)], cwd=self.runner,
             env={**self.environment, 'RACE_MODE': race}, text=True, capture_output=True,
         )
 
@@ -133,6 +136,20 @@ exec "$REAL_GIT" "$@"
         self.assertNotIn('No changes to commit', result.stdout)
         self.assertEqual(self.push_count(), 0)
         self.assertEqual(self.remote_file('time.log'), 'original')
+
+    def test_commit_excludes_unrelated_tracked_and_untracked_changes(self):
+        (self.runner / 'unrelated.txt').write_text('unrelated local change\n')
+        (self.runner / 'untracked.txt').write_text('untracked local content\n')
+        # Test the commit step alone: a later rebase correctly rejects a dirty
+        # tracked file, which is separate from deciding what gets committed.
+        result = self.run_sync(commit_only=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.git('diff-tree', '--no-commit-id', '--name-only',
+                                  '-r', 'HEAD', cwd=self.runner), 'time.log')
+        self.assertEqual(self.git('diff', '--cached', '--name-only', cwd=self.runner), '')
+        self.assertEqual(self.git('diff', '--name-only', cwd=self.runner), 'unrelated.txt')
+        self.assertEqual(self.git('ls-files', '--others', '--exclude-standard',
+                                  cwd=self.runner), 'untracked.txt')
 
     def test_push_race_rebases_and_preserves_both_writers(self):
         result = self.run_sync(race='once')

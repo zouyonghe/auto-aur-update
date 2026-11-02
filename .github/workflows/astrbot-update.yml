@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: auto-aur-update-astrbot
+  group: auto-aur-update-astrbot-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
