@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tempfile
@@ -11,6 +12,11 @@ SCRIPT = ROOT / 'scripts/pixelterm-c.sh'
 
 
 class PixelTermUpdateTests(unittest.TestCase):
+    def field(self, text, name):
+        matches = re.findall(rf'^\s*{re.escape(name)}\s*=\s*(\S+)\s*$', text, re.MULTILINE)
+        self.assertEqual(len(matches), 1, text)
+        return matches[0]
+
     def run_update(self, current_rel, *, current_version='1.8.2',
                    template_version='1.8.2', template_rel='1', template_indent='',
                    latest_version='1.8.2', expect_success=True):
@@ -114,36 +120,42 @@ exec /usr/bin/sed "$@"
 
     def test_regular_same_version_update_preserves_pkgrel(self):
         package, metadata = self.run_update('8')
-        self.assertIn('pkgrel=8', package)
-        self.assertIn('pkgrel = 8', metadata)
+        self.assertEqual(self.field(package, 'pkgrel'), '8')
+        self.assertEqual(self.field(metadata, 'pkgrel'), '8')
 
     def test_same_version_update_publishes_explicit_higher_template_pkgrel(self):
         package, metadata = self.run_update('2', template_rel='8')
-        self.assertIn('pkgrel=8', package)
-        self.assertIn('pkgrel = 8', metadata)
+        self.assertEqual(self.field(package, 'pkgrel'), '8')
+        self.assertEqual(self.field(metadata, 'pkgrel'), '8')
 
     def test_same_version_update_does_not_lower_higher_aur_pkgrel(self):
         package, metadata = self.run_update('8', template_rel='3')
-        self.assertIn('pkgrel=8', package)
-        self.assertIn('pkgrel = 8', metadata)
+        self.assertEqual(self.field(package, 'pkgrel'), '8')
+        self.assertEqual(self.field(metadata, 'pkgrel'), '8')
 
     def test_stale_template_pkgrel_is_ignored_for_new_upstream_version(self):
         package, metadata = self.run_update(
             '1', current_version='1.8.3', template_version='1.8.2',
             template_rel='2', latest_version='1.8.3')
-        self.assertIn('pkgrel=1', package)
-        self.assertIn('pkgrel = 1', metadata)
+        self.assertEqual(self.field(package, 'pkgrel'), '1')
+        self.assertEqual(self.field(metadata, 'pkgrel'), '1')
 
     def test_indented_template_pkgrel_is_read(self):
         package, metadata = self.run_update('2', template_rel='8', template_indent='  ')
-        self.assertIn('pkgrel=8', package)
-        self.assertIn('pkgrel = 8', metadata)
+        self.assertEqual(self.field(package, 'pkgrel'), '8')
+        self.assertEqual(self.field(metadata, 'pkgrel'), '8')
+
+    def test_indented_lower_template_pkgrel_is_normalized_to_aur_revision(self):
+        package, metadata = self.run_update(
+            '8', template_rel='3', template_indent='  ')
+        self.assertEqual(self.field(package, 'pkgrel'), '8')
+        self.assertEqual(self.field(metadata, 'pkgrel'), '8')
 
     def test_new_upstream_version_starts_at_pkgrel_one(self):
         package, metadata = self.run_update('8', template_rel='12', latest_version='1.9.0')
-        self.assertIn('pkgver=1.9.0', package)
-        self.assertIn('pkgrel=1', package)
-        self.assertIn('pkgrel = 1', metadata)
+        self.assertEqual(self.field(package, 'pkgver'), '1.9.0')
+        self.assertEqual(self.field(package, 'pkgrel'), '1')
+        self.assertEqual(self.field(metadata, 'pkgrel'), '1')
 
     def test_older_upstream_version_is_rejected(self):
         result, _, _ = self.run_update('8', latest_version='1.8.1', expect_success=False)

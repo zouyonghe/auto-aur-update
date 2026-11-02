@@ -57,17 +57,17 @@ if (( version_order < 0 )); then
     exit 1
 fi
 
-sed -i "s/pkgver=.*/pkgver=$latest_ver/" PKGBUILD
+sed -i "s/^[[:space:]]*pkgver=.*/pkgver=$latest_ver/" PKGBUILD
 if (( version_order > 0 )); then
     # New upstream version starts a fresh package release.
-    sed -i "s/pkgrel=.*/pkgrel=1/" PKGBUILD
+    sed -i "s/^[[:space:]]*pkgrel=.*/pkgrel=1/" PKGBUILD
 else
     if (( $(vercmp "$template_ver" "$current_ver") == 0 )) &&
        (( $(vercmp "$template_rel" "$current_rel") > 0 )); then
         current_rel=$template_rel
     fi
     # Keep the higher revision from the committed template or published AUR package.
-    sed -i "s/pkgrel=.*/pkgrel=$current_rel/" PKGBUILD
+    sed -i "s/^[[:space:]]*pkgrel=.*/pkgrel=$current_rel/" PKGBUILD
 fi
 
 # 手动计算源码包校验和，避免 updpkgsums 的 bug
