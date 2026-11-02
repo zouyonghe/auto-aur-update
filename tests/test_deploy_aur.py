@@ -124,6 +124,10 @@ fi
         self.assertIn("github.event.schedule == '30 2 * * *'", main)
         self.assertIn("github.event.schedule == '45 3 * * *'", main)
         self.assertIn('github.event.repository.owner.id == github.event.sender.id', main)
+        self.assertNotIn('\nconcurrency:\n  group: auto-aur-update\n', main)
+        self.assertIn('group: auto-aur-update-pixelterm-${{ matrix.PKGBUILDs }}', main)
+        self.assertIn('group: auto-aur-update-astrbot', main)
+        self.assertIn('group: auto-aur-update-sync', main)
         self.assertIn('  UpdatePkg:', main)
         self.assertIn('  UpdateAstrBot:', main)
         self.assertIn('uses: ./.github/workflows/publish-astrbot-desktop-bin.yml', main)
@@ -301,10 +305,17 @@ class DeploymentTests(unittest.TestCase):
             scan = root / 'ssh-keyscan'
             scan.write_text(f'#!/bin/sh\nprintf "%s\\n" "{host_key}"\n')
             scan.chmod(0o755)
+            keygen_args = root / 'ssh-keygen-args'
+            keygen_input = root / 'ssh-keygen-input'
+            keygen_called = root / 'ssh-keygen-called'
             keygen = root / 'ssh-keygen'
             keygen.write_text(f'''#!/bin/sh
 set -eu
+printf '%s\\n' "$*" > "$SSH_KEYGEN_ARGS"
+touch "$SSH_KEYGEN_CALLED"
 input=$(cat)
+printf '%s\\n' "$input" > "$SSH_KEYGEN_INPUT"
+[ "$*" = '-lf - -E sha256' ] || {{ echo 'unexpected ssh-keygen arguments' >&2; exit 1; }}
 [ "$input" = "{public_key}" ] || {{ echo 'host field was not removed' >&2; exit 1; }}
 echo '256 SHA256:RFzBCUItH9LZS0cKB5UE6ceAYhBD5C8GeOBip8Z11+4 aur'
 ''')
@@ -314,8 +325,14 @@ echo '256 SHA256:RFzBCUItH9LZS0cKB5UE6ceAYhBD5C8GeOBip8Z11+4 aur'
             result = subprocess.run(['bash', '-c', 'set -euo pipefail\nssh_keyscan_types=ed25519\n' + block],
                                     text=True, capture_output=True,
                                     env={**os.environ, 'HOME': str(root),
+                                         'SSH_KEYGEN_ARGS': str(keygen_args),
+                                         'SSH_KEYGEN_INPUT': str(keygen_input),
+                                         'SSH_KEYGEN_CALLED': str(keygen_called),
                                          'PATH': str(root) + os.pathsep + os.environ['PATH']})
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertTrue(keygen_called.is_file())
+            self.assertEqual(keygen_args.read_text(), '-lf - -E sha256\n')
+            self.assertEqual(keygen_input.read_text(), public_key + '\n')
             self.assertEqual((root / '.ssh/known_hosts').read_text(), host_key + '\n')
 
 

@@ -16,10 +16,6 @@ on:
 permissions:
   contents: write
 
-concurrency:
-  group: auto-aur-update
-  cancel-in-progress: false
-
 jobs:
   UpdatePkg:
     if: >-
@@ -28,6 +24,9 @@ jobs:
        (github.event_name == 'watch' &&
         github.event.repository.owner.id == github.event.sender.id) ||
        (github.event_name == 'schedule' && github.event.schedule == '30 2 * * *'))
+    concurrency:
+      group: auto-aur-update-pixelterm-${{ matrix.PKGBUILDs }}
+      cancel-in-progress: false
     strategy:
       fail-fast: false
       matrix:
@@ -61,6 +60,9 @@ jobs:
       github.ref == 'refs/heads/main' &&
       (github.event_name == 'workflow_dispatch' ||
        (github.event_name == 'schedule' && github.event.schedule == '45 3 * * *'))
+    concurrency:
+      group: auto-aur-update-astrbot
+      cancel-in-progress: false
     uses: ./.github/workflows/publish-astrbot-desktop-bin.yml
     with:
       source_sha: ${{ github.sha }}
@@ -73,6 +75,9 @@ jobs:
        (github.event_name == 'watch' &&
         github.event.repository.owner.id == github.event.sender.id) ||
        (github.event_name == 'schedule' && github.event.schedule == '30 2 * * *'))
+    concurrency:
+      group: auto-aur-update-sync
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     steps:
     - name: Checkout
