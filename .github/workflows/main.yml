@@ -25,7 +25,7 @@ jobs:
         github.event.repository.owner.id == github.event.sender.id) ||
        (github.event_name == 'schedule' && github.event.schedule == '30 2 * * *'))
     concurrency:
-      group: auto-aur-update-pixelterm-${{ matrix.PKGBUILDs }}
+      group: ${{ inputs.rebuild_current == true && format('auto-aur-update-pixelterm-rebuild-{0}', github.run_id) || format('auto-aur-update-pixelterm-{0}', matrix.PKGBUILDs) }}
       cancel-in-progress: false
     strategy:
       fail-fast: false

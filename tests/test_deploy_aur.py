@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tempfile
@@ -12,6 +13,20 @@ AUTO_UPDATE_WORKFLOW = Path(__file__).resolve().parents[1] / '.github/workflows/
 
 SCRIPT = Path(__file__).resolve().parents[1] / '.github/actions/deploy-aur/build.sh'
 SSH_CONFIG = Path(__file__).resolve().parents[1] / '.github/actions/deploy-aur/ssh_config'
+
+
+def workflow_job(text, name):
+    match = re.search(rf"(?ms)^  {re.escape(name)}:\n(.*?)(?=^  [A-Za-z][\w-]*:\n|\Z)", text)
+    if match is None:
+        raise AssertionError(f'Missing workflow job: {name}')
+    return match.group(1)
+
+
+def workflow_job_condition(job, name):
+    match = re.search(r'(?m)^    if: >-\n((?:^      .*\n)+)', job)
+    if match is None:
+        raise AssertionError(f'Missing condition for workflow job: {name}')
+    return ' '.join(match.group(1).split())
 
 
 class CloneTests(unittest.TestCase):
@@ -118,22 +133,34 @@ fi
         main = AUTO_UPDATE_WORKFLOW.read_text()
         publish = PUBLISH_WORKFLOW.read_text()
         validation = WORKFLOW.read_text()
+        pixelterm = workflow_job(main, 'UpdatePkg')
+        astrbot = workflow_job(main, 'UpdateAstrBot')
+        task = workflow_job(main, 'Task')
         self.assertIn('workflow_dispatch:', main)
         self.assertIn('cron: "30 2 * * *"', main)
         self.assertIn('cron: "45 3 * * *"', main)
-        self.assertIn("github.event.schedule == '30 2 * * *'", main)
-        self.assertIn("github.event.schedule == '45 3 * * *'", main)
-        self.assertIn('github.event.repository.owner.id == github.event.sender.id', main)
+        pixelterm_condition = (
+            "github.ref == 'refs/heads/main' && "
+            "(github.event_name == 'workflow_dispatch' || "
+            "(github.event_name == 'watch' && github.event.repository.owner.id == github.event.sender.id) || "
+            "(github.event_name == 'schedule' && github.event.schedule == '30 2 * * *'))"
+        )
+        astrbot_condition = (
+            "github.ref == 'refs/heads/main' && "
+            "(github.event_name == 'workflow_dispatch' || "
+            "(github.event_name == 'schedule' && github.event.schedule == '45 3 * * *'))"
+        )
+        self.assertEqual(workflow_job_condition(pixelterm, 'UpdatePkg'), pixelterm_condition)
+        self.assertEqual(workflow_job_condition(astrbot, 'UpdateAstrBot'), astrbot_condition)
+        self.assertEqual(workflow_job_condition(task, 'Task'), pixelterm_condition)
         self.assertNotIn('\nconcurrency:\n  group: auto-aur-update\n', main)
-        self.assertIn('group: auto-aur-update-pixelterm-${{ matrix.PKGBUILDs }}', main)
+        self.assertIn('inputs.rebuild_current == true', pixelterm)
+        self.assertIn("format('auto-aur-update-pixelterm-rebuild-{0}', github.run_id)", pixelterm)
+        self.assertIn("format('auto-aur-update-pixelterm-{0}', matrix.PKGBUILDs)", pixelterm)
         self.assertIn('group: auto-aur-update-astrbot', main)
         self.assertIn('group: auto-aur-update-sync', main)
-        self.assertIn('  UpdatePkg:', main)
-        self.assertIn('  UpdateAstrBot:', main)
         self.assertIn('uses: ./.github/workflows/publish-astrbot-desktop-bin.yml', main)
         self.assertIn('secrets: inherit', main)
-        self.assertIn('  Task:', main)
-        task = main.split('\n  Task:\n', 1)[1]
         self.assertNotIn('\n    needs:', task)
         self.assertIn('workflow_call:', publish)
         self.assertIn('source_sha: ${{ inputs.source_sha }}', publish)
