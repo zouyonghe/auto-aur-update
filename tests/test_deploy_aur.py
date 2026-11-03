@@ -396,7 +396,9 @@ if [[ "$first" == "$1" ]]; then echo -1; else echo 1; fi
             public_key = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeKeyMaterialForRegressionTest'
             host_key = f'aur.archlinux.org {public_key}'
             scan = root / 'ssh-keyscan'
-            scan.write_text(f'#!/bin/sh\nprintf "%s\\n" "{host_key}"\n')
+            scan.write_text(
+                f'#!/bin/sh\nprintf "%s\\n" "# aur.archlinux.org:22 SSH-2.0-OpenSSH_10.6" "{host_key}"\n'
+            )
             scan.chmod(0o755)
             keygen_args = root / 'ssh-keygen-args'
             keygen_input = root / 'ssh-keygen-input'
@@ -427,6 +429,23 @@ echo '256 SHA256:RFzBCUItH9LZS0cKB5UE6ceAYhBD5C8GeOBip8Z11+4 aur'
             self.assertEqual(keygen_args.read_text(), '-lf - -E sha256\n')
             self.assertEqual(keygen_input.read_text(), public_key + '\n')
             self.assertEqual((root / '.ssh/known_hosts').read_text(), host_key + '\n')
+
+    def test_keyscan_with_only_banner_fails_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / '.ssh').mkdir()
+            scan = root / 'ssh-keyscan'
+            scan.write_text('#!/bin/sh\nprintf "%s\\n" "# aur.archlinux.org:22 SSH-2.0-OpenSSH_10.6"\n')
+            scan.chmod(0o755)
+            block = section("echo '::group::Adding aur.archlinux.org to known hosts'",
+                            "echo '::group::Importing private key'")
+            result = subprocess.run(['bash', '-c', 'set -euo pipefail\nssh_keyscan_types=ed25519\n' + block],
+                                    text=True, capture_output=True,
+                                    env={**os.environ, 'HOME': str(root),
+                                         'PATH': str(root) + os.pathsep + os.environ['PATH']})
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('AUR SSH host scan returned no recognized host keys.', result.stderr)
+            self.assertEqual((root / '.ssh/known_hosts').read_text(), '')
 
 
 class FinalPackageTests(unittest.TestCase):
