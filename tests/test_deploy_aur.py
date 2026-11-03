@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tempfile
@@ -8,9 +9,45 @@ import unittest
 WORKFLOW = Path(__file__).resolve().parents[1] / '.github/workflows/astrbot-desktop-bin.yml'
 PUBLISH_WORKFLOW = Path(__file__).resolve().parents[1] / '.github/workflows/publish-astrbot-desktop-bin.yml'
 BUILD_WORKFLOW = Path(__file__).resolve().parents[1] / '.github/workflows/build-astrbot-desktop-bin.yml'
+ROOT = Path(__file__).resolve().parents[1]
+PIXELTERM_WORKFLOW = ROOT / '.github/workflows/pixelterm-update.yml'
+ASTRBOT_UPDATE_WORKFLOW = ROOT / '.github/workflows/astrbot-update.yml'
+TASK_WORKFLOW = ROOT / '.github/workflows/task-sync.yml'
 
 SCRIPT = Path(__file__).resolve().parents[1] / '.github/actions/deploy-aur/build.sh'
 SSH_CONFIG = Path(__file__).resolve().parents[1] / '.github/actions/deploy-aur/ssh_config'
+
+
+def workflow_job(text, name):
+    match = re.search(rf"(?ms)^  {re.escape(name)}:\n(.*?)(?=^  [A-Za-z][\w-]*:\n|\Z)", text)
+    if match is None:
+        raise AssertionError(f'Missing workflow job: {name}')
+    return match.group(1)
+
+
+def workflow_job_condition(job, name):
+    match = re.search(r'(?m)^    if: >-\n((?:^      .*\n)+)', job)
+    if match is None:
+        raise AssertionError(f'Missing condition for workflow job: {name}')
+    return ' '.join(match.group(1).split())
+
+
+def workflow_schedule_crons(text):
+    on_match = re.search(r'(?ms)^on:\n(.*?)(?=^[A-Za-z][\w-]*:|\Z)', text)
+    if on_match is None:
+        raise AssertionError('Missing workflow triggers')
+    schedule_match = re.search(
+        r'(?m)^  schedule:\n((?:^    .*\n|^      .*\n)+)', on_match.group(1))
+    if schedule_match is None:
+        raise AssertionError('Missing scheduled triggers')
+    return re.findall(r'(?m)^    - cron: "([^"]+)"$', schedule_match.group(1))
+
+
+def workflow_concurrency(text):
+    match = re.search(r'(?m)^concurrency:\n((?:^  .*\n)+)', text)
+    if match is None:
+        raise AssertionError('Missing workflow concurrency block')
+    return ' '.join(match.group(1).split())
 
 
 class CloneTests(unittest.TestCase):
@@ -107,22 +144,82 @@ fi
             with self.subTest(job=name):
                 self.assertIn("github.ref == 'refs/heads/main'", body)
 
-    def test_pr_validation_covers_publish_and_shared_workflows(self):
-        text = WORKFLOW.read_text()
+    def test_pr_validation_covers_publish_and_split_workflows(self):
+        paths = re.search(r'(?m)^  pull_request:\n    paths:\n((?:      - .*\n)+)',
+                          WORKFLOW.read_text())
+        self.assertIsNotNone(paths)
+        text = paths.group(1)
+        self.assertIn("      - 'pixelterm-c/**'", text)
+        self.assertIn("      - 'scripts/pixelterm-c.sh'", text)
+        self.assertIn("      - 'build-aur-action/**'", text)
+        self.assertIn("      - '.github/workflows/pixelterm-update.yml'", text)
+        self.assertIn("      - '.github/workflows/astrbot-update.yml'", text)
+        self.assertIn("      - '.github/workflows/task-sync.yml'", text)
         self.assertIn("      - '.github/workflows/publish-astrbot-desktop-bin.yml'", text)
         self.assertIn("      - '.github/workflows/build-astrbot-desktop-bin.yml'", text)
+        self.assertNotIn("      - '.github/workflows/main.yml'", text)
 
-    def test_manual_publish_uses_trusted_workflow_run(self):
-        validation = WORKFLOW.read_text()
+    def test_split_workflows_keep_triggers_and_publication_independent(self):
+        self.assertFalse((ROOT / '.github/workflows/main.yml').exists())
+        pixelterm = PIXELTERM_WORKFLOW.read_text()
+        astrbot_update = ASTRBOT_UPDATE_WORKFLOW.read_text()
+        task = TASK_WORKFLOW.read_text()
         publish = PUBLISH_WORKFLOW.read_text()
-        self.assertIn('workflow_dispatch:', validation)
-        self.assertNotIn('workflow_dispatch:', publish)
-        self.assertIn('workflow_run:', publish)
-        self.assertIn("workflows: ['Update AstrBot AUR package']", publish)
-        self.assertIn("github.event.workflow_run.head_branch == 'main'", publish)
-        self.assertIn('github.event.workflow_run.head_repository.full_name == github.repository', publish)
-        self.assertIn("github.event.workflow_run.conclusion == 'success'", publish)
-        self.assertIn('source_sha: ${{ github.event_name == \'workflow_run\' && github.event.workflow_run.head_sha || github.sha }}', publish)
+        pixelterm_condition = (
+            "github.ref == 'refs/heads/main' && "
+            "(github.event_name == 'workflow_dispatch' || "
+            "(github.event_name == 'watch' && github.event.repository.owner.id == github.event.sender.id) || "
+            "(github.event_name == 'schedule' && github.event.schedule == '30 2 * * *'))"
+        )
+        astrbot_condition = (
+            "github.ref == 'refs/heads/main' && "
+            "(github.event_name == 'workflow_dispatch' || "
+            "github.event_name == 'schedule')"
+        )
+        self.assertEqual(workflow_schedule_crons(pixelterm), ['30 2 * * *'])
+        self.assertEqual(workflow_schedule_crons(astrbot_update), ['45 3 * * *'])
+        self.assertEqual(workflow_schedule_crons(task), ['30 2 * * *'])
+        self.assertEqual(workflow_job_condition(workflow_job(pixelterm, 'update'), 'update'), pixelterm_condition)
+        self.assertEqual(workflow_job_condition(workflow_job(astrbot_update, 'update'), 'update'), astrbot_condition)
+        self.assertEqual(workflow_job_condition(workflow_job(task, 'sync'), 'sync'), pixelterm_condition)
+        self.assertEqual(workflow_concurrency(pixelterm),
+                         'group: auto-aur-update-pixelterm-${{ github.ref }} cancel-in-progress: false')
+        self.assertEqual(workflow_concurrency(astrbot_update),
+                         'group: auto-aur-update-astrbot-${{ github.ref }} cancel-in-progress: false')
+        self.assertEqual(workflow_concurrency(task),
+                         'group: auto-aur-update-sync-${{ github.ref }} cancel-in-progress: false')
+        self.assertIn('workflow_dispatch:', pixelterm)
+        self.assertIn('actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683', pixelterm)
+        self.assertNotIn('aur-update-queue', pixelterm)
+        self.assertNotIn('PixelTerm-Rebuild-Requests', pixelterm)
+        self.assertNotIn('needs:', pixelterm)
+        self.assertNotIn('rebuild_current', pixelterm)
+        self.assertIn('uses: ./.github/workflows/publish-astrbot-desktop-bin.yml', astrbot_update)
+        self.assertIn('secrets: inherit', astrbot_update)
+        self.assertIn('workflow_dispatch:', astrbot_update)
+        self.assertNotIn('needs:', task)
+        self.assertIn('git add time.log', task)
+        self.assertNotIn('git add .', task)
+        self.assertIn('workflow_call:', publish)
+        self.assertIn('source_sha: ${{ inputs.source_sha }}', publish)
+        self.assertNotIn('workflow_run:', publish)
+        self.assertIn('timeout-minutes: 20', publish)
+
+    def test_non_main_dispatch_cannot_replace_pending_main_updates(self):
+        main_groups = []
+        for workflow in (PIXELTERM_WORKFLOW, ASTRBOT_UPDATE_WORKFLOW, TASK_WORKFLOW):
+            with self.subTest(workflow=workflow.name):
+                concurrency = workflow_concurrency(workflow.read_text())
+                group = concurrency.removeprefix('group: ').removesuffix(' cancel-in-progress: false')
+                self.assertIn('${{ github.ref }}', group)
+                main_group = group.replace('${{ github.ref }}', 'refs/heads/main')
+                feature_group = group.replace('${{ github.ref }}', 'refs/heads/feature')
+                self.assertNotEqual(main_group, feature_group)
+                # The group uses only the ref, so scheduled/manual runs on main
+                # share one queue regardless of their event or run ID.
+                self.assertNotIn('${{', main_group)
+                main_groups.append(main_group)
+        self.assertEqual(len(set(main_groups)), 3)
 
     def test_pr_and_publish_workflows_call_shared_build_pipeline(self):
         self.assertTrue(BUILD_WORKFLOW.is_file())
@@ -227,6 +324,15 @@ class DeploymentTests(unittest.TestCase):
             root = Path(directory)
             clone = root / 'clone'
             clone.mkdir()
+            bin_dir = root / 'bin'
+            bin_dir.mkdir()
+            vercmp = bin_dir / 'vercmp'
+            vercmp.write_text('''#!/bin/bash
+if [[ "$1" == "$2" ]]; then echo 0; exit 0; fi
+first=$(printf '%s\\n%s\\n' "$1" "$2" | sort -V | head -n1)
+if [[ "$first" == "$1" ]]; then echo -1; else echo 1; fi
+''')
+            vercmp.chmod(0o755)
             (clone / 'PKGBUILD').write_text(existing)
             source = root / 'incoming'
             source.write_text(incoming)
@@ -234,7 +340,8 @@ class DeploymentTests(unittest.TestCase):
                             'if [[ -n "$assets" ]]')
             block = block.replace('/tmp/local-repo', str(clone)).replace('/tmp/generated-PKGBUILD', str(root / 'generated'))
             result = subprocess.run(['bash', '-c', 'set -euo pipefail\npkgbuild=$1\n' + block,
-                                     'bash', str(source)], text=True, capture_output=True)
+                                     'bash', str(source)], text=True, capture_output=True,
+                                    env={**os.environ, 'PATH': f'{bin_dir}{os.pathsep}{os.environ["PATH"]}'})
             self.assertEqual((clone / 'PKGBUILD').read_text(), incoming if accepted else existing,
                              result.stdout + result.stderr)
             return result
@@ -271,7 +378,7 @@ class DeploymentTests(unittest.TestCase):
             (root / '.ssh').mkdir()
             subprocess.run(['ssh-keygen', '-q', '-t', 'ed25519', '-N', '', '-f', str(root / 'rogue')], check=True)
             scan = root / 'ssh-keyscan'
-            scan.write_text('#!/bin/sh\ncat "$HOME/rogue.pub"\n')
+            scan.write_text('#!/bin/sh\nprintf "aur.archlinux.org "\ncat "$HOME/rogue.pub"\n')
             scan.chmod(0o755)
             block = section("echo '::group::Adding aur.archlinux.org to known hosts'",
                             "echo '::group::Importing private key'")
@@ -281,6 +388,45 @@ class DeploymentTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn('Unrecognized AUR SSH host fingerprint', result.stderr)
             self.assertEqual((root / '.ssh/known_hosts').read_text(), '')
+
+    def test_scanned_known_hosts_line_is_fingerprinted_and_preserved(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / '.ssh').mkdir()
+            public_key = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeKeyMaterialForRegressionTest'
+            host_key = f'aur.archlinux.org {public_key}'
+            scan = root / 'ssh-keyscan'
+            scan.write_text(f'#!/bin/sh\nprintf "%s\\n" "{host_key}"\n')
+            scan.chmod(0o755)
+            keygen_args = root / 'ssh-keygen-args'
+            keygen_input = root / 'ssh-keygen-input'
+            keygen_called = root / 'ssh-keygen-called'
+            keygen = root / 'ssh-keygen'
+            keygen.write_text(f'''#!/bin/sh
+set -eu
+printf '%s\\n' "$*" > "$SSH_KEYGEN_ARGS"
+touch "$SSH_KEYGEN_CALLED"
+input=$(cat)
+printf '%s\\n' "$input" > "$SSH_KEYGEN_INPUT"
+[ "$*" = '-lf - -E sha256' ] || {{ echo 'unexpected ssh-keygen arguments' >&2; exit 1; }}
+[ "$input" = "{public_key}" ] || {{ echo 'host field was not removed' >&2; exit 1; }}
+echo '256 SHA256:RFzBCUItH9LZS0cKB5UE6ceAYhBD5C8GeOBip8Z11+4 aur'
+''')
+            keygen.chmod(0o755)
+            block = section("echo '::group::Adding aur.archlinux.org to known hosts'",
+                            "echo '::group::Importing private key'")
+            result = subprocess.run(['bash', '-c', 'set -euo pipefail\nssh_keyscan_types=ed25519\n' + block],
+                                    text=True, capture_output=True,
+                                    env={**os.environ, 'HOME': str(root),
+                                         'SSH_KEYGEN_ARGS': str(keygen_args),
+                                         'SSH_KEYGEN_INPUT': str(keygen_input),
+                                         'SSH_KEYGEN_CALLED': str(keygen_called),
+                                         'PATH': str(root) + os.pathsep + os.environ['PATH']})
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertTrue(keygen_called.is_file())
+            self.assertEqual(keygen_args.read_text(), '-lf - -E sha256\n')
+            self.assertEqual(keygen_input.read_text(), public_key + '\n')
+            self.assertEqual((root / '.ssh/known_hosts').read_text(), host_key + '\n')
 
 
 class FinalPackageTests(unittest.TestCase):
@@ -319,20 +465,32 @@ class FinalPackageTests(unittest.TestCase):
             root = Path(directory)
             env = {**os.environ, 'GIT_AUTHOR_NAME': 'Test', 'GIT_COMMITTER_NAME': 'Test',
                    'GIT_AUTHOR_EMAIL': 'test@example.org', 'GIT_COMMITTER_EMAIL': 'test@example.org'}
+            bin_dir = root / 'bin'
+            bin_dir.mkdir()
+            vercmp = bin_dir / 'vercmp'
+            vercmp.write_text('''#!/bin/bash
+if [[ "$1" == "$2" ]]; then echo 0; exit 0; fi
+first=$(printf '%s\\n%s\\n' "$1" "$2" | sort -V | head -n1)
+if [[ "$first" == "$1" ]]; then echo -1; else echo 1; fi
+''')
+            vercmp.chmod(0o755)
+            env['PATH'] = f'{bin_dir}{os.pathsep}{env["PATH"]}'
             def git(*args):
                 return subprocess.check_output(['git', '-C', directory, *args], env=env, text=True)
             git('init', '--initial-branch=master')
             (root / 'PKGBUILD').write_text('pkgver=4.29.1\npkgrel=1\n')
             metadata = 'pkgbase = test-package\n\tpkgver = 4.29.1\n\tpkgrel = 1\n'
             (root / '.SRCINFO').write_text(metadata)
-            (root / 'helper.sh').write_text('original asset')
+            asset = root / 'package-helper.data'
+            asset.write_text('original asset')
             git('add', '.')
+            git('add', 'package-helper.data')
             git('commit', '-qm', 'initial')
             original = git('rev-parse', 'HEAD').strip()
             if change == 'asset':
-                (root / 'helper.sh').write_text('changed asset')
+                asset.write_text('changed asset')
             elif change == 'deleted_asset':
-                (root / 'helper.sh').unlink()
+                asset.unlink()
             elif change == 'post_process':
                 block = section("if [ -n \"$post_process\" ]; then",
                                 "echo '::group::Generating .SRCINFO'")
@@ -345,9 +503,9 @@ class FinalPackageTests(unittest.TestCase):
                 (root / 'PKGBUILD').write_text('pkgver=4.29.1\npkgrel=2\n')
             block = section("echo '::group::Committing files to the repository'",
                             "echo '::group::Publishing the repository'")
-            result = subprocess.run(['bash', '-c', 'set -euo pipefail\nassets=helper.sh\nallow_empty_commits=false\ncommit_message=update\n' + block],
+            result = subprocess.run(['bash', '-c', 'set -euo pipefail\nassets=package-helper.data\nallow_empty_commits=false\ncommit_message=update\n' + block],
                                     cwd=directory, env=env, text=True, capture_output=True)
-            self.committed_asset = git('show', 'HEAD:helper.sh')
+            self.committed_asset = git('show', 'HEAD:package-helper.data')
             return result, original == git('rev-parse', 'HEAD').strip()
 
     def test_final_changes_require_version_bump(self):

@@ -1,42 +1,28 @@
 name: Publish AstrBot AUR package
 
 on:
-  schedule:
-    - cron: '45 3 * * *'
-  workflow_run:
-    workflows: ['Update AstrBot AUR package']
-    types: [completed]
+  workflow_call:
+    inputs:
+      source_sha:
+        description: Commit used to prepare and build the package
+        required: true
+        type: string
 
 permissions:
   contents: read
 
-concurrency:
-  group: astrbot-aur-publish
-  cancel-in-progress: false
-
 jobs:
   prepare:
-    if: >-
-      github.ref == 'refs/heads/main' &&
-      (github.event_name == 'schedule' ||
-       (github.event_name == 'workflow_run' &&
-        github.event.workflow_run.head_branch == 'main' &&
-        github.event.workflow_run.head_repository.full_name == github.repository &&
-        github.event.workflow_run.conclusion == 'success'))
+    if: github.ref == 'refs/heads/main'
     uses: ./.github/workflows/build-astrbot-desktop-bin.yml
     with:
-      source_sha: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+      source_sha: ${{ inputs.source_sha }}
 
   publish:
     needs: prepare
-    if: >-
-      github.ref == 'refs/heads/main' &&
-      (github.event_name == 'schedule' ||
-       (github.event_name == 'workflow_run' &&
-        github.event.workflow_run.head_branch == 'main' &&
-        github.event.workflow_run.head_repository.full_name == github.repository &&
-        github.event.workflow_run.conclusion == 'success'))
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:

@@ -1,0 +1,48 @@
+name: Update PixelTerm AUR package
+
+on:
+  watch:
+    types: [started]
+  schedule:
+    - cron: "30 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Serialize publishes per branch; triggers reconcile package state.
+# A new pending run can replace an older pending run; this is not a FIFO queue.
+concurrency:
+  group: auto-aur-update-pixelterm-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  update:
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'watch' &&
+        github.event.repository.owner.id == github.event.sender.id) ||
+       (github.event_name == 'schedule' && github.event.schedule == '30 2 * * *'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Prepare PixelTerm package
+        uses: ./build-aur-action
+        with:
+          pkgname: pixelterm-c
+          pkgdir: pixelterm-c
+
+      - name: Publish PixelTerm package
+        uses: ./.github/actions/deploy-aur
+        with:
+          pkgname: pixelterm-c
+          pkgbuild: pixelterm-c/PKGBUILD
+          commit_username: ${{ secrets.AUR_USERNAME }}
+          commit_email: ${{ secrets.AUR_EMAIL }}
+          ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          commit_message: Update pixelterm-c
+          allow_empty_commits: false
+          ssh_keyscan_types: rsa,ecdsa,ed25519

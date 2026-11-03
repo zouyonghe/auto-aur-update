@@ -1,17 +1,21 @@
-name: Update AstrBot AUR package
+name: Validate AstrBot AUR package
 
 on:
   pull_request:
     paths:
       - 'astrbot-desktop-bin/**'
+      - 'pixelterm-c/**'
       - 'scripts/astrbot-desktop-bin.py'
+      - 'scripts/pixelterm-c.sh'
       - 'tests/**'
+      - 'build-aur-action/**'
       - '.github/workflows/astrbot-desktop-bin.yml'
+      - '.github/workflows/pixelterm-update.yml'
+      - '.github/workflows/astrbot-update.yml'
+      - '.github/workflows/task-sync.yml'
       - '.github/workflows/publish-astrbot-desktop-bin.yml'
       - '.github/workflows/build-astrbot-desktop-bin.yml'
       - '.github/actions/deploy-aur/**'
-  workflow_dispatch:
-
 permissions:
   contents: read
 

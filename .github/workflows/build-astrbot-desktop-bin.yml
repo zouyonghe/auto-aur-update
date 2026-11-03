@@ -18,6 +18,7 @@ permissions:
 jobs:
   prepare:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     container: archlinux:base-devel
     outputs:
       source_sha: ${{ inputs.source_sha }}
@@ -49,6 +50,7 @@ jobs:
   build:
     needs: prepare
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     container: archlinux:base-devel
     strategy:
       fail-fast: false

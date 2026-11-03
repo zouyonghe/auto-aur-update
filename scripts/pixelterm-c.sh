@@ -20,6 +20,12 @@ if [[ ! "$current_ver" =~ ^[0-9]+(\.[0-9]+)*$ || ! "$current_rel" =~ ^[0-9]+$ ]]
     echo "Invalid pkgver/pkgrel in AUR .SRCINFO" >&2
     exit 1
 fi
+template_ver=$(sed -n 's/^[[:space:]]*pkgver=//p' PKGBUILD | head -n1)
+template_rel=$(sed -n 's/^[[:space:]]*pkgrel=//p' PKGBUILD | head -n1)
+if [[ ! "$template_ver" =~ ^[0-9]+(\.[0-9]+)*$ || ! "$template_rel" =~ ^[0-9]+$ ]]; then
+    echo "Invalid pkgver/pkgrel in PKGBUILD" >&2
+    exit 1
+fi
 
 # 获取 GitHub 最新版本号
 latest_ver=$(curl --fail --silent --show-error --location https://api.github.com/repos/zouyonghe/PixelTerm-C/releases/latest \
@@ -51,17 +57,17 @@ if (( version_order < 0 )); then
     exit 1
 fi
 
-sed -i "s/pkgver=.*/pkgver=$latest_ver/" PKGBUILD
+sed -i "s/^[[:space:]]*pkgver=.*/pkgver=$latest_ver/" PKGBUILD
 if (( version_order > 0 )); then
     # New upstream version starts a fresh package release.
-    sed -i "s/pkgrel=.*/pkgrel=1/" PKGBUILD
+    sed -i "s/^[[:space:]]*pkgrel=.*/pkgrel=1/" PKGBUILD
 else
-    # Keep the template aligned with published metadata without lowering pkgrel.
-    sed -i "s/pkgrel=.*/pkgrel=$current_rel/" PKGBUILD
-    if [[ "${REBUILD_CURRENT:-false}" == true ]] && (( current_rel < 2 )); then
-        # Opt-in, idempotent one-time rebuild for dependency ABI changes.
-        sed -i "s/pkgrel=.*/pkgrel=2/" PKGBUILD
+    if (( $(vercmp "$template_ver" "$current_ver") == 0 )) &&
+       (( $(vercmp "$template_rel" "$current_rel") > 0 )); then
+        current_rel=$template_rel
     fi
+    # Keep the higher revision from the committed template or published AUR package.
+    sed -i "s/^[[:space:]]*pkgrel=.*/pkgrel=$current_rel/" PKGBUILD
 fi
 
 # 手动计算源码包校验和，避免 updpkgsums 的 bug

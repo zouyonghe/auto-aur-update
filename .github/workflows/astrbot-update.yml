@@ -1,0 +1,26 @@
+name: Update AstrBot AUR package
+
+on:
+  schedule:
+    - cron: "45 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Serialize publishes per branch; triggers reconcile package state.
+# A new pending run can replace an older pending run; this is not a FIFO queue.
+concurrency:
+  group: auto-aur-update-astrbot-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  update:
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'workflow_dispatch' ||
+       github.event_name == 'schedule')
+    uses: ./.github/workflows/publish-astrbot-desktop-bin.yml
+    with:
+      source_sha: ${{ github.sha }}
+    secrets: inherit
