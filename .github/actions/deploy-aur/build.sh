@@ -50,7 +50,9 @@ if ! host_keys=$(timeout --signal=TERM 15s ssh-keyscan -T 10 -t "$ssh_keyscan_ty
 fi
 [[ -n "$host_keys" ]] || { echo 'AUR SSH host scan returned no keys.' >&2; exit 1; }
 : > ~/.ssh/known_hosts
+accepted_host_key_count=0
 while IFS= read -r host_key; do
+  [[ -z "$host_key" || "$host_key" == \#* ]] && continue
   read -r _ key_type key_data _ <<< "$host_key"
   [[ -n "${key_type:-}" && -n "${key_data:-}" ]] || {
     echo 'AUR SSH host scan returned a malformed key.' >&2
@@ -59,10 +61,15 @@ while IFS= read -r host_key; do
   fingerprint=$(printf '%s %s\n' "$key_type" "$key_data" | ssh-keygen -lf - -E sha256 | awk '{print $2}')
   case "$fingerprint" in
     SHA256:RFzBCUItH9LZS0cKB5UE6ceAYhBD5C8GeOBip8Z11+4|SHA256:uTa/0PndEgPZTf76e1DFqXKJEXKsn7m9ivhLQtzGOCI|SHA256:5s5cIyReIfNNVGRFdDbe3hdYiI5OelHGpw2rOUud3Q8)
-      printf '%s\n' "$host_key" >> ~/.ssh/known_hosts ;;
+      printf '%s\n' "$host_key" >> ~/.ssh/known_hosts
+      accepted_host_key_count=$((accepted_host_key_count + 1)) ;;
     *) echo 'Unrecognized AUR SSH host fingerprint.' >&2; exit 1 ;;
   esac
 done <<< "$host_keys"
+[[ "$accepted_host_key_count" -gt 0 ]] || {
+  echo 'AUR SSH host scan returned no recognized host keys.' >&2
+  exit 1
+}
 echo '::endgroup::'
 
 echo '::group::Importing private key'
