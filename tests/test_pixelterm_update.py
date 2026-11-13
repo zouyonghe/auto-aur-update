@@ -321,6 +321,25 @@ exec /usr/bin/sed "$@"
         self.assertEqual(self.field(package, 'pkgrel'), '8')
         self.assertEqual(self.field(metadata, 'pkgrel'), '8')
 
+    def test_dotted_revisions_increment_last_component(self):
+        for previous, expected in (('1.1', '1.2'), ('1.9', '1.10'), ('2.009', '2.10')):
+            with self.subTest(previous=previous):
+                package, _ = self.run_update(previous, published_deps='')
+                self.assertEqual(self.field(package, 'pkgrel'), expected)
+
+    def test_dotted_revisions_preserve_noop_manual_priority_and_release_reset(self):
+        package, _ = self.run_update('1.9', template_rel='1.1')
+        self.assertEqual(self.field(package, 'pkgrel'), '1.9')
+        package, _ = self.run_update('1.9', template_rel='2.1', published_deps='')
+        self.assertEqual(self.field(package, 'pkgrel'), '2.1')
+        package, _ = self.run_update('1.9', template_rel='2.1', latest_version='1.9.0')
+        self.assertEqual(self.field(package, 'pkgrel'), '1')
+
+    def test_malformed_dotted_revisions_are_rejected(self):
+        for value in ('1..1', '1.', '.1', '1.1;id', '1.2.9'):
+            with self.subTest(value=value):
+                self.run_update(value, expect_success=False)
+
     def test_same_version_update_publishes_explicit_higher_template_pkgrel(self):
         package, metadata = self.run_update('2', template_rel='8')
         self.assertEqual(self.field(package, 'pkgrel'), '8')

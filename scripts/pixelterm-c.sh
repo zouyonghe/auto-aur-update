@@ -21,13 +21,13 @@ git -C "$aur_dir/package" rev-parse HEAD > .aur-revision
 
 current_ver=$(sed -n 's/^[[:space:]]*pkgver = //p' "$aur_srcinfo" | head -n1)
 current_rel=$(sed -n 's/^[[:space:]]*pkgrel = //p' "$aur_srcinfo" | head -n1)
-if [[ ! "$current_ver" =~ ^[0-9]+(\.[0-9]+)*$ || ! "$current_rel" =~ ^[0-9]+$ ]]; then
+if [[ ! "$current_ver" =~ ^[0-9]+(\.[0-9]+)*$ || ! "$current_rel" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
     echo "Invalid pkgver/pkgrel in AUR .SRCINFO" >&2
     exit 1
 fi
 template_ver=$(sed -n 's/^[[:space:]]*pkgver=//p' PKGBUILD | head -n1)
 template_rel=$(sed -n 's/^[[:space:]]*pkgrel=//p' PKGBUILD | head -n1)
-if [[ ! "$template_ver" =~ ^[0-9]+(\.[0-9]+)*$ || ! "$template_rel" =~ ^[0-9]+$ ]]; then
+if [[ ! "$template_ver" =~ ^[0-9]+(\.[0-9]+)*$ || ! "$template_rel" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
     echo "Invalid pkgver/pkgrel in PKGBUILD" >&2
     exit 1
 fi
@@ -100,7 +100,15 @@ if (( version_order > 0 )); then
     sed -i "s/^[[:space:]]*pkgrel=.*/pkgrel=1/" PKGBUILD
 else
     if [[ "$published_record" != "$dependency_record" ]]; then
-        current_rel=$((10#$current_rel + 1))
+        next_rel=$((10#${current_rel##*.} + 1))
+        if [[ "$current_rel" == *.* ]]; then
+            next_rel="${current_rel%.*}.${next_rel}"
+        fi
+        if (( $(vercmp "$next_rel" "$current_rel") <= 0 )); then
+            echo "Cannot safely increment pkgrel=$current_rel" >&2
+            exit 1
+        fi
+        current_rel=$next_rel
         echo "Dependency versions changed; requesting pkgrel=$current_rel"
     fi
     if (( $(vercmp "$template_ver" "$current_ver") == 0 )) &&

@@ -18,7 +18,7 @@ class BuildActionMigrationTests(unittest.TestCase):
             text=True, capture_output=True,
         )
 
-    def run_full_entrypoint(self, *extra_args, pacman_status='0'):
+    def run_full_entrypoint(self, *extra_args, pacman_status='0', release_tag=''):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             script = root / 'entrypoint.sh'
@@ -41,6 +41,7 @@ class BuildActionMigrationTests(unittest.TestCase):
             su.write_text(
                 '#!/bin/sh\n'
                 'test -z "${GH_TOKEN:-}${GITHUB_TOKEN:-}" || exit 77\n'
+                'printf "tag:%s\\n" "${PIXELTERM_RELEASE_TAG:-}"\n'
                 'printf "su:%s\\n" "$*" >> "$CALLS"\n'
             )
             su.chmod(0o755)
@@ -49,7 +50,8 @@ class BuildActionMigrationTests(unittest.TestCase):
                 cwd=root,
                 env={**__import__('os').environ, 'PATH': f'{bin_dir}:{__import__("os").environ["PATH"]}',
                      'CALLS': str(calls / 'commands'), 'PACMAN_STATUS': pacman_status,
-                     'GH_TOKEN': 'must-not-reach-updater', 'GITHUB_TOKEN': 'must-not-reach-updater'},
+                     'GH_TOKEN': 'must-not-reach-updater', 'GITHUB_TOKEN': 'must-not-reach-updater',
+                     'PIXELTERM_RELEASE_TAG': release_tag},
                 text=True, capture_output=True,
             )
             return (result,
@@ -89,6 +91,11 @@ class BuildActionMigrationTests(unittest.TestCase):
         result, calls, _ = self.run_full_entrypoint('false', pacman_status='1')
         self.assertNotEqual(result.returncode, 0)
         self.assertNotIn('su:', calls)
+
+    def test_release_tag_survives_entrypoint_without_forwarding_tokens(self):
+        result, _, _ = self.run_full_entrypoint('false', release_tag='v1.9.0')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('tag:v1.9.0', result.stdout)
 
     def test_deprecated_input_is_declared_and_forwarded(self):
         action = (ROOT / 'build-aur-action/action.yml').read_text()

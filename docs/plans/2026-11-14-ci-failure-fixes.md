@@ -143,3 +143,29 @@ commands referenced by the generic CI/PR skills.
 - 108 tests pass on the host and inside the deploy image. Retry tests use real
   local Git history and reject different bytes, metadata, extra files, executable
   modes, failed metadata generation/comparison, and failed release verification.
+
+## Retry semantics, dotted revisions, and Docker environment evidence
+
+- Already-published retry success is disabled for `test: true`; a stale snapshot
+  cannot bypass explicitly requested build tests. After content/release checks,
+  a bounded ls-remote query requires the remote master HEAD to remain equal to
+  the compared clone. Concurrent commits and failed remote queries reject the
+  retry. A writer can still change AUR after the final read; no atomic-read or
+  remote-lock guarantee is claimed.
+- PixelTerm accepts makepkg's integer[.integer] revisions in AUR and the template.
+  Dependency rebuilds increment the final component in decimal and use vercmp
+  to reject non-increasing/overflowed results. No-op revision preservation,
+  manual template precedence, and new-upstream reset-to-1 behavior are retained.
+- README explicitly states that build-aur-action prepares metadata only; source
+  builds and startup checks run separately on a disposable runner.
+- The Docker tag-forwarding allegation is not valid: the workflow step env is
+  included in ContainerActionHandler's Environment and copied into
+  container.ContainerEnvironmentVariables. runs.envs is not a supported action
+  metadata key. Source: https://github.com/actions/runner/blob/main/src/Runner.Worker/Handlers/ContainerActionHandler.cs.
+  A real preparation-image entrypoint test supplied a public tag plus dummy
+  tokens: the real builder login retained the tag, while the updater probe saw
+  neither token. No extra action environment declaration was needed.
+- 114 tests pass on the host and inside the deployment image, including real
+  local-Git concurrent pushes, requested-test retry rejection, dotted revision
+  cases, and entrypoint tag checks. ShellCheck, Bash syntax, and whitespace checks
+  passed. No AUR publication or merge was performed.

@@ -118,7 +118,7 @@ if [[ -n "$expected_revision_file" ]]; then
     # Assets/post-processing need their own complete-tree proof; never guess.
     if [[ "$actual_revision" != absent && -n "${pkgbuild:-}" &&
           -z "${assets:-}" && -z "${post_process:-}" &&
-          "${updpkgsums:-false}" == false && "$force_push" == false ]] &&
+          "${updpkgsums:-false}" == false && "$test" == false && "$force_push" == false ]] &&
        [[ "$(git -C /tmp/local-repo ls-tree -r --name-only HEAD)" == $'.SRCINFO\nPKGBUILD' ]] &&
        [[ "$(git -C /tmp/local-repo ls-tree -r --format='%(objectmode)' HEAD)" == $'100644\n100644' ]]; then
       retry_dir=$(mktemp -d)
@@ -130,6 +130,12 @@ if [[ -n "$expected_revision_file" ]]; then
         rmdir "$retry_dir"
         if [[ -n "${release_verifier:-}" ]]; then
           python3 "$release_verifier" --verify --package "$pkgbuild"
+        fi
+        if ! remote_revision=$(timeout --signal=TERM 30s git -C /tmp/local-repo \
+          ls-remote --exit-code origin refs/heads/master | awk '{print $1}') ||
+           [[ "$remote_revision" != "$actual_revision" ]]; then
+          echo 'AUR changed or could not be revalidated after retry checks; rerun.' >&2
+          exit 1
         fi
         echo 'Prepared package already published; retry is a no-op.'
         echo '::endgroup::'

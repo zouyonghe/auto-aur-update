@@ -55,7 +55,8 @@ class CloneTests(unittest.TestCase):
     def run_clone(self, *, empty=True, fail=False, force=False, expected=None, api_count='1',
                   published=None, metadata='metadata\n', extra_file=False, assets='',
                   post_process='', updpkgsums='false', verifier_status=None,
-                  metadata_status='0', compare_status=None, executable=False):
+                  metadata_status='0', compare_status=None, executable=False,
+                  requested_test='false', advance_remote=False, remote_query_status='0'):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             remote = root / 'remote.git'
@@ -81,6 +82,13 @@ class CloneTests(unittest.TestCase):
             shim = root / 'git'
             shim.write_text('''#!/bin/bash
 set -eu
+if [[ " $* " == *" ls-remote "* ]]; then
+  [[ "$REMOTE_QUERY_STATUS" == 0 ]] || exit "$REMOTE_QUERY_STATUS"
+  if [[ "$ADVANCE_REMOTE" == true ]]; then
+    "$REAL_GIT" -C "$TEST_SEED" -c user.name=Test -c user.email=test@example.org commit --allow-empty -m concurrent >/dev/null
+    "$REAL_GIT" -C "$TEST_SEED" push origin master >/dev/null 2>&1
+  fi
+fi
 if [[ " $* " == *" clone "* ]]; then
   [[ " $* " == *" ssh://aur@aur.archlinux.org/test-package.git "* ]] || exit 65
   if [[ $SIMULATE_FAILURE == true ]]; then
@@ -134,6 +142,8 @@ fi
                    'SIMULATE_FAILURE': str(fail).lower(), 'AUR_COUNT': api_count,
                    'INCOMING': str(incoming),
                    'METADATA_STATUS': metadata_status,
+                   'ADVANCE_REMOTE': str(advance_remote).lower(), 'TEST_SEED': str(root / 'seed'),
+                   'REMOTE_QUERY_STATUS': remote_query_status,
                    'SIMULATE_API_FAILURE': str(api_count == 'api-failure').lower(),
                    'AUR_COUNT_JSON': ('{"type":"error","resultcount":0}' if api_count == 'rpc-error'
                                      else '{"type":"multiinfo","resultcount": ' + api_count + '}')}
@@ -142,6 +152,7 @@ fi
                                f'assets={shlex.quote(assets)}',
                                f'post_process={shlex.quote(post_process)}',
                                f'updpkgsums={updpkgsums}',
+                               f'test={requested_test}',
                                f'release_verifier={verifier if verifier_status is not None else ""}',
                                f"expected_revision_file='{revision_file if expected else ''}'",
                                f'force_push={str(force).lower()}', block])
@@ -168,6 +179,20 @@ fi
                 settings = {'published': 'pkgver=1.8.6\npkgrel=2\n', **values}
                 result, _, _ = self.run_clone(empty=False, expected='old-commit', **settings)
                 self.assertNotEqual(result.returncode, 0)
+
+    def test_retry_does_not_skip_requested_build_test(self):
+        result, _, _ = self.run_clone(empty=False, expected='old-commit',
+                                      published='pkgver=1.8.6\npkgrel=2\n', requested_test='true')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn('already published', result.stdout)
+
+    def test_retry_revalidates_remote_after_content_comparison(self):
+        for values in ({'advance_remote': True}, {'remote_query_status': '1'}):
+            with self.subTest(values=values):
+                result, _, _ = self.run_clone(empty=False, expected='old-commit',
+                                              published='pkgver=1.8.6\npkgrel=2\n', **values)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn('already published', result.stdout)
 
     def test_pull_request_workflow_contains_no_publish_secrets(self):
         self.assertNotIn('secrets.AUR_', WORKFLOW.read_text())

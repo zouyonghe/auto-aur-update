@@ -4,7 +4,10 @@ Update the program in aur warehouse automatically
 ## AstrBot desktop
 
 `astrbot-desktop-bin` repackages the official stable Debian binaries for
-`x86_64` and `aarch64`. PixelTerm-C keeps its existing updater and build action.
+`x86_64` and `aarch64`. PixelTerm-C's `build-aur-action` prepares metadata only;
+it no longer compiles source or produces a built package. Source compilation and
+startup checks must run separately using `scripts/build-pixelterm.sh` on a
+disposable runner; `pixelterm-update.yml` wires these jobs together safely.
 
 - `.github/workflows/pixelterm-update.yml` updates PixelTerm-C at 02:30 UTC and supports a
   manual dispatch and owner-only repository-watch trigger. It serializes AUR publishes and is
@@ -97,7 +100,9 @@ If the authenticated API fails or returns an invalid tag, release resolution
 falls back to the public latest-release redirect and validates its host, project,
 and numeric tag before exporting it. No token is passed to this public request.
 
-- Changed dependencies automatically request AUR's current `pkgrel + 1`.
+- Changed dependencies automatically increment AUR's final numeric `pkgrel`
+  component (`8` → `9`, `1.9` → `1.10`). Both AUR and template revisions accept
+  makepkg's `integer[.integer]` format; `vercmp` verifies forward progress.
   A higher explicit template revision wins; new upstream releases start at `1`.
 - A missing legacy record triggers one baseline rebuild. Unchanged records keep
   the revision; identical packaging skips compilation. Compatible dependency
@@ -111,8 +116,11 @@ and numeric tag before exporting it. No token is passed to this public request.
   Deployment rejects an AUR commit changed since preparation.
   A publish-only retry succeeds without pushing if the remote tree contains
   exactly the prepared PKGBUILD and its regenerated `.SRCINFO`, byte-for-byte.
-  Assets, post-processing, checksum rewrites, extra files, or different contents
-  keep the stale-snapshot rejection; any release verifier still must pass.
+  Assets, post-processing, checksum rewrites, requested `test: true` checks,
+  extra files, or different contents keep the stale-snapshot rejection; any
+  release verifier still must pass. The remote HEAD is rechecked immediately
+  before reporting no-op success. A concurrent change or failed query rejects
+  the retry; another writer can still update AUR after that final observation.
 - Old template marker-like comments are removed before writing exactly one
   canonical installed-dependency record; malformed published records still fail.
 - The published PKGBUILD is the durable baseline, updated only after successful
