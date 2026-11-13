@@ -4,7 +4,7 @@ set -o errexit -o nounset -o pipefail
 
 cd "$(dirname "$0")/../pixelterm-c"
 
-# Read only generated metadata from AUR; never source or copy its PKGBUILD.
+# Treat AUR metadata and the dependency comment as data; never source its PKGBUILD.
 aur_dir=$(mktemp -d)
 trap 'rm -rf "$aur_dir"' EXIT
 if git clone --quiet --depth=1 https://aur.archlinux.org/pixelterm-c.git "$aur_dir/package"; then
@@ -13,6 +13,8 @@ else
     echo "Failed to read current package metadata from AUR" >&2
     exit 1
 fi
+
+git -C "$aur_dir/package" rev-parse HEAD > .aur-revision
 
 current_ver=$(sed -n 's/^[[:space:]]*pkgver = //p' "$aur_srcinfo" | head -n1)
 current_rel=$(sed -n 's/^[[:space:]]*pkgrel = //p' "$aur_srcinfo" | head -n1)
@@ -27,8 +29,32 @@ if [[ ! "$template_ver" =~ ^[0-9]+(\.[0-9]+)*$ || ! "$template_rel" =~ ^[0-9]+$ 
     exit 1
 fi
 
+# Query the refreshed Arch database, preserving epochs and package revisions.
+# shortcut: x86_64 repository only; add per-arch probes if ARM-only updates matter.
+if ! dependency_packages=$(LC_ALL=C pacman -Sp --print-format '%n=%v' --nodeps libmupdf ffmpeg); then
+    echo "Failed to query dependency versions" >&2
+    exit 1
+fi
+dependency_record=$(printf '%s\n' "$dependency_packages" | paste -sd ' ' -)
+dependency_pattern='^libmupdf=[a-zA-Z0-9.:_+~-]+ ffmpeg=[a-zA-Z0-9.:_+~-]+$'
+if [[ ! "$dependency_record" =~ $dependency_pattern ]]; then
+    echo "Invalid dependency versions from Arch" >&2
+    exit 1
+fi
+published_record=$(sed -n 's/^# rebuild-deps: //p' "$aur_dir/package/PKGBUILD")
+record_count=$(grep -c '^# rebuild-deps:' "$aur_dir/package/PKGBUILD" || true)
+if (( record_count > 1 )) ||
+   { (( record_count == 1 )) && [[ ! "$published_record" =~ $dependency_pattern ]]; }; then
+    echo "Invalid published dependency record" >&2
+    exit 1
+fi
+
 # 获取 GitHub 最新版本号
-latest_ver=$(curl --fail --silent --show-error --location https://api.github.com/repos/zouyonghe/PixelTerm-C/releases/latest \
+api_headers=()
+if [[ -n "${GH_TOKEN:-}" ]]; then
+    api_headers=(-H "Authorization: Bearer ${GH_TOKEN}")
+fi
+latest_ver=$(curl --fail --silent --show-error --location "${api_headers[@]}" https://api.github.com/repos/zouyonghe/PixelTerm-C/releases/latest \
     | jq -r '.tag_name // empty' 2>/dev/null \
     | sed 's/^v//' || true)
 if [ -z "$latest_ver" ]; then
@@ -50,7 +76,7 @@ if [[ ! "$latest_ver" =~ ^[0-9]+(\.[0-9]+)*$ ]]; then
     exit 1
 fi
 
-echo "Updating from $current_ver to $latest_ver (always update mode)..."
+echo "Reconciling $current_ver with upstream $latest_ver..."
 version_order=$(vercmp "$latest_ver" "$current_ver")
 if (( version_order < 0 )); then
     echo "Latest upstream version $latest_ver is older than AUR version $current_ver" >&2
@@ -62,6 +88,10 @@ if (( version_order > 0 )); then
     # New upstream version starts a fresh package release.
     sed -i "s/^[[:space:]]*pkgrel=.*/pkgrel=1/" PKGBUILD
 else
+    if [[ "$published_record" != "$dependency_record" ]]; then
+        current_rel=$((10#$current_rel + 1))
+        echo "Dependency versions changed; requesting pkgrel=$current_rel"
+    fi
     if (( $(vercmp "$template_ver" "$current_ver") == 0 )) &&
        (( $(vercmp "$template_rel" "$current_rel") > 0 )); then
         current_rel=$template_rel
@@ -75,8 +105,8 @@ base_url="https://github.com/zouyonghe/PixelTerm-C"
 tarball_url="${base_url}/archive/refs/tags/v${latest_ver}.tar.gz"
 
 echo "Downloading and calculating checksum for source tarball..."
-curl --fail --silent --show-error --location "${tarball_url}" -o /tmp/pixelterm-c.tar.gz
-sha256_src=$(sha256sum /tmp/pixelterm-c.tar.gz | cut -d' ' -f1)
+curl --fail --silent --show-error --location "${tarball_url}" -o "$aur_dir/source.tar.gz"
+sha256_src=$(sha256sum "$aur_dir/source.tar.gz" | cut -d' ' -f1)
 echo "source tarball checksum: ${sha256_src}"
 
 # 检查 sha256 值是否有效
@@ -87,6 +117,8 @@ fi
 
 # 更新 PKGBUILD 中的校验和
 sed -i "s/^sha256sums=.*/sha256sums=('${sha256_src}')/" PKGBUILD
+sed -i '/^# rebuild-deps:/d' PKGBUILD
+printf '# rebuild-deps: %s\n' "$dependency_record" >> PKGBUILD
 
 # 验证 sha256sums 是否已正确更新
 echo "Verifying updated sha256sums..."
@@ -98,9 +130,11 @@ if grep -q "^sha256sums=('')" PKGBUILD; then
     exit 1
 fi
 
-# 清理临时文件
-rm -f /tmp/pixelterm-c.tar.gz
 makepkg --printsrcinfo > .SRCINFO
-rm -f pixelterm*
+if cmp -s PKGBUILD "$aur_dir/package/PKGBUILD"; then
+    echo "Package and dependency versions unchanged; skipping build"
+else
+    makepkg --cleanbuild --syncdeps --noconfirm --force
+fi
 
 cd -

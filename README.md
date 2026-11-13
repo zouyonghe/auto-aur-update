@@ -8,7 +8,8 @@ Update the program in aur warehouse automatically
 
 - `.github/workflows/pixelterm-update.yml` updates PixelTerm-C at 02:30 UTC and supports a
   manual dispatch and owner-only repository-watch trigger. It serializes AUR publishes and is
-  idempotent when the package is already current. For a dependency ABI or packaging-only rebuild,
+  idempotent when the package is already current. Dependency updates trigger rebuilds
+  automatically (see below). For a manual packaging-only rebuild,
   set `pkgver` in `pixelterm-c/PKGBUILD` to the current AUR version and increase `pkgrel` above
   the published revision. Commit both values, then dispatch the workflow from `main`.
 - `.github/workflows/astrbot-update.yml` updates AstrBot at 03:45 UTC and supports a manual
@@ -26,8 +27,8 @@ Update the program in aur warehouse automatically
   credentials.
 - The updater requires both release assets and their GitHub SHA256 digests;
   makepkg downloads and verifies the actual files before publishing.
-- PixelTerm-C starts a new upstream version at `pkgrel=1`. For a same-version
-  dependency ABI or packaging-only rebuild, first align the committed `pkgver`
+- PixelTerm-C starts a new upstream version at `pkgrel=1`. For a manual same-version
+  packaging-only rebuild, first align the committed `pkgver`
   with AUR, then set `pkgrel` higher than AUR's current revision. A template's
   revision applies only to its own upstream version; older template revisions
   are ignored. AstrBot preserves higher committed/AUR revisions.
@@ -70,3 +71,53 @@ Validation: `python3 -m unittest discover -s tests -v`, then `makepkg` from
 `astrbot-desktop-bin/` on Arch. CI repacks ARM binaries on an x86_64 runner;
 this validates archives/checksums, not native ARM execution or Wayland GUI.
 Install/upgrade through your AUR helper rather than the AppImage updater.
+
+PR validation also builds the actual deployment Docker image, checks both
+equal/different-file comparisons, and runs the test suite inside it without AUR
+credentials. The image explicitly installs `diffutils` for `cmp`: a fuller local
+test environment previously hid
+this missing dependency. Comparator failures now report a tool/access error,
+not a false packaging-change error; genuine changes still require higher pkgrel.
+
+## PixelTerm-C dependency rebuilds
+
+Every scheduled/manual update refreshes the Arch system and queries the current
+`libmupdf` and `ffmpeg` package versions, including epochs and package revisions.
+It compares them with a `# rebuild-deps:` comment in the published AUR PKGBUILD;
+no upstream or dependency version is hardcoded in the detector.
+Release API requests use the workflow's read-only GitHub token to reduce
+unauthenticated API limits; local runs can omit `GH_TOKEN` and retain fallbacks.
+
+- Changed dependencies automatically request AUR's current `pkgrel + 1`.
+  A higher explicit template revision wins; new upstream releases start at `1`.
+- A missing legacy record triggers one baseline rebuild. Unchanged records keep
+  the revision; identical packaging skips compilation. Compatible dependency
+  updates also trigger rebuilds: this is package-version detection, not ABI analysis.
+- Failed queries, malformed records, or failed builds stop publication. Changed
+  packaging is clean-built with dependencies and checked using `--version` and
+  `--help`. Deployment rejects an AUR commit changed since preparation.
+- The published PKGBUILD is the durable baseline, updated only after successful
+  publication. No GitHub cache or manual revision commit is needed for dependency
+  changes. Existing explicit revision requests remain supported.
+
+The scheduled detector runs on x86_64 Arch. ARM-only repository changes are not
+detected, and ARM execution is not tested. The daily schedule may lag repository
+updates or be delayed by GitHub. Installations rebuild only when users update
+through their AUR helper; no installed binary is remotely replaced.
+
+MuPDF's update from `libmupdf.so.28.5` to `libmupdf.so.28.6` illustrates why
+this is needed: existing executables retain the old SONAME. Reinstalling a cached
+package does not relink them.
+
+For an immediate local repair after a full system upgrade, clean-build instead
+of reusing a cached package:
+
+```sh
+git clone https://aur.archlinux.org/pixelterm-c.git
+cd pixelterm-c
+makepkg --cleanbuild --syncdeps --install
+pixelterm -V
+```
+
+Rebuild again when MuPDF or FFmpeg changes its required SONAME. Never symlink
+an old SONAME to a different library version to bypass the loader error.

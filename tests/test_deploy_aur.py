@@ -319,7 +319,7 @@ class DeploymentTests(unittest.TestCase):
             committed = subprocess.check_output(['git', '-C', directory, 'show', 'HEAD:PKGBUILD'], text=True)
             self.assertEqual(committed, 'pkgname=test-package\n')
 
-    def copy_package(self, existing, incoming, *, accepted=False):
+    def copy_package(self, existing, incoming, *, accepted=False, cmp_status=None):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             clone = root / 'clone'
@@ -333,6 +333,10 @@ first=$(printf '%s\\n%s\\n' "$1" "$2" | sort -V | head -n1)
 if [[ "$first" == "$1" ]]; then echo -1; else echo 1; fi
 ''')
             vercmp.chmod(0o755)
+            if cmp_status is not None:
+                comparator = bin_dir / 'cmp'
+                comparator.write_text(f'#!/bin/sh\nexit {cmp_status}\n')
+                comparator.chmod(0o755)
             (clone / 'PKGBUILD').write_text(existing)
             source = root / 'incoming'
             source.write_text(incoming)
@@ -346,6 +350,20 @@ if [[ "$first" == "$1" ]]; then echo -1; else echo 1; fi
                              result.stdout + result.stderr)
             return result
 
+    def test_identical_same_revision_package_is_accepted(self):
+        package = 'pkgver=1.8.6\npkgrel=1\n'
+        result = self.copy_package(package, package, accepted=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_comparison_tool_failure_is_not_reported_as_package_change(self):
+        package = 'pkgver=1.8.6\npkgrel=1\n'
+        for status in (2, 127):
+            with self.subTest(status=status):
+                result = self.copy_package(package, package, cmp_status=status)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('Failed to compare PKGBUILD', result.stderr)
+                self.assertNotIn('strictly higher pkgrel', result.stderr)
+
     def test_malicious_pkgrel_is_rejected_before_sed_or_vercmp(self):
         incoming = 'pkgver=4.29.1\npkgrel=1\n'
         for payload in ('99/e touch /tmp/not-allowed', '9; touch /tmp/not-allowed', '$(id)', '9\npkgrel=10'):
@@ -355,10 +373,12 @@ if [[ "$first" == "$1" ]]; then echo -1; else echo 1; fi
                 self.assertIn('Invalid pkgrel', result.stderr)
 
     def test_same_version_changed_content_requires_higher_revision(self):
-        result = self.copy_package('pkgver=4.29.1\npkgrel=2\n# new AUR content\n',
-                                   'pkgver=4.29.1\npkgrel=1\n# stale incoming content\n')
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn('strictly higher pkgrel', result.stderr)
+        for revision in ('1', '2'):
+            with self.subTest(revision=revision):
+                result = self.copy_package('pkgver=4.29.1\npkgrel=2\n# new AUR content\n',
+                                           f'pkgver=4.29.1\npkgrel={revision}\n# stale incoming content\n')
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('strictly higher pkgrel', result.stderr)
 
     def test_higher_revision_can_publish_changed_packaging(self):
         result = self.copy_package('pkgver=4.29.1\npkgrel=2\n',

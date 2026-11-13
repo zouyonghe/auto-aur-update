@@ -18,7 +18,7 @@ class BuildActionMigrationTests(unittest.TestCase):
             text=True, capture_output=True,
         )
 
-    def run_full_entrypoint(self, *extra_args):
+    def run_full_entrypoint(self, *extra_args, pacman_status='0'):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             script = root / 'entrypoint.sh'
@@ -33,7 +33,8 @@ class BuildActionMigrationTests(unittest.TestCase):
                 shim = bin_dir / command
                 shim.write_text(
                     '#!/bin/sh\n'
-                    f'printf "%s\\n" "{command}" >> "$CALLS"\n'
+                    f'printf "%s\\n" "{command}:$*" >> "$CALLS"\n'
+                    + ('exit "$PACMAN_STATUS"\n' if command == 'pacman' else '')
                 )
                 shim.chmod(0o755)
             su = bin_dir / 'su'
@@ -46,7 +47,7 @@ class BuildActionMigrationTests(unittest.TestCase):
                 ['bash', str(script), 'pixelterm-c', 'pixelterm-c', *extra_args],
                 cwd=root,
                 env={**__import__('os').environ, 'PATH': f'{bin_dir}:{__import__("os").environ["PATH"]}',
-                     'CALLS': str(calls / 'commands')},
+                     'CALLS': str(calls / 'commands'), 'PACMAN_STATUS': pacman_status},
                 text=True, capture_output=True,
             )
             return (result,
@@ -76,9 +77,16 @@ class BuildActionMigrationTests(unittest.TestCase):
     def test_regular_call_runs_the_full_setup_after_validation(self):
         result, calls, sudoers = self.run_full_entrypoint('false')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(calls.splitlines(), ['useradd', 'chown', 'chmod', 'pacman-key', 'pacman',
-                                              'su:- builder -c cd /github/workspace && bash scripts/pixelterm-c.sh'])
+        self.assertEqual(calls.splitlines(), ['useradd:builder -m', 'chown:-R builder:builder .',
+                                              'chmod:-R a+rw .', 'pacman-key:--init',
+                                              'pacman:-Syu --noconfirm',
+                                              'su:--whitelist-environment=GH_TOKEN - builder -c cd /github/workspace && bash scripts/pixelterm-c.sh'])
         self.assertIn('builder ALL=(ALL) NOPASSWD: ALL\n', sudoers)
+
+    def test_failed_system_upgrade_stops_preparation(self):
+        result, calls, _ = self.run_full_entrypoint('false', pacman_status='1')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn('su:', calls)
 
     def test_deprecated_input_is_declared_and_forwarded(self):
         action = (ROOT / 'build-aur-action/action.yml').read_text()

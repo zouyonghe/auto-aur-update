@@ -148,10 +148,16 @@ echo '::group::Copying files into /tmp/local-repo'
       exit 1
     fi
     if (( $(vercmp "$existing_base" "$incoming_base") == 0 )) &&
-       (( $(vercmp "$incoming_rel" "$existing_rel") <= 0 )) &&
-       ! cmp -s /tmp/generated-PKGBUILD /tmp/local-repo/PKGBUILD; then
-      echo 'Changed package requires a strictly higher pkgrel; refusing overwrite.' >&2
-      exit 1
+       (( $(vercmp "$incoming_rel" "$existing_rel") <= 0 )); then
+      comparison_status=0
+      cmp -s /tmp/generated-PKGBUILD /tmp/local-repo/PKGBUILD || comparison_status=$?
+      case "$comparison_status" in
+        0) ;;
+        1)
+          echo 'Changed package requires a strictly higher pkgrel; refusing overwrite.' >&2
+          exit 1 ;;
+        *) echo 'Failed to compare PKGBUILD; check diffutils and file access.' >&2; exit 1 ;;
+      esac
     fi
   fi
   cp /tmp/generated-PKGBUILD /tmp/local-repo/PKGBUILD

@@ -31,6 +31,8 @@ jobs:
 
       - name: Prepare PixelTerm package
         uses: ./build-aur-action
+        env:
+          GH_TOKEN: ${{ github.token }}
         with:
           pkgname: pixelterm-c
           pkgdir: pixelterm-c
@@ -40,6 +42,7 @@ jobs:
         with:
           pkgname: pixelterm-c
           pkgbuild: pixelterm-c/PKGBUILD
+          expected_revision_file: pixelterm-c/.aur-revision
           commit_username: ${{ secrets.AUR_USERNAME }}
           commit_email: ${{ secrets.AUR_EMAIL }}
           ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}

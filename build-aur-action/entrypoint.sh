@@ -1,5 +1,7 @@
 #!/bin/bash
 
+set -o errexit -o nounset -o pipefail
+
 pkgdir=$1
 pkgname=$2
 rebuild_current=${3:-false}
@@ -22,9 +24,9 @@ chown -R builder:builder .
 chmod -R a+rw .
 
 pacman-key --init
-pacman -Sy --noconfirm &&
+pacman -Syu --noconfirm
 
 # 切换到 builder 用户执行脚本
-su - builder -c "cd /github/workspace && bash scripts/${pkgname}.sh"
+su --whitelist-environment=GH_TOKEN - builder -c "cd /github/workspace && bash scripts/${pkgname}.sh"
 
 #echo OK
