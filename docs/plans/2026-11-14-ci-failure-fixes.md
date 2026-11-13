@@ -83,3 +83,8 @@ commands referenced by the generic CI/PR skills.
 - 101 tests pass on the host and isolated deploy-image workspace. Preparation-image
   build and real cmp checks passed. Temporary mutation probes catch reverting the
   installed query, template cleanup, and version-probe exit-status guard.
+- An additional fresh-container full updater run successfully installed/reconciled
+  dependencies and reached makepkg, but GitHub's source download ended with curl
+  56 (TLS unexpected EOF) before compilation. This run did not establish a fresh
+  full PixelTerm build result. The real minimal makepkg probe did reject expected
+  version text with exit 1 (makepkg status 4). No host packages were changed.
