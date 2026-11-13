@@ -5,6 +5,7 @@ import subprocess
 import tempfile
 import textwrap
 import unittest
+import yaml
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -18,6 +19,31 @@ def workflow_step(filename, name):
 
 
 class WorkflowIsolationTests(unittest.TestCase):
+    def test_pixelterm_build_cannot_supply_publication_artifacts(self):
+        jobs = yaml.safe_load((WORKFLOWS / 'pixelterm-update.yml').read_text())['jobs']
+        self.assertIn('build', jobs)
+        self.assertIn('publish', jobs)
+        prepare = jobs['update']
+        build = jobs['build']
+        publish = jobs['publish']
+        self.assertEqual(build['needs'], 'update')
+        self.assertIn('build', publish['needs'])
+        uploaded = [step for step in prepare['steps'] if step.get('uses', '').startswith('actions/upload-artifact@')]
+        self.assertEqual(len(uploaded), 1)
+        self.assertEqual(prepare['outputs']['artifact_id'], '${{ steps.snapshot.outputs.artifact-id }}')
+        self.assertEqual(uploaded[0]['id'], 'snapshot')
+        for job in (build, publish):
+            downloads = [step for step in job['steps'] if step.get('uses', '').startswith('actions/download-artifact@')]
+            self.assertEqual([step['with']['artifact-ids'] for step in downloads],
+                             ['${{ needs.update.outputs.artifact_id }}'])
+            self.assertTrue(downloads[0]['with']['merge-multiple'])
+        self.assertFalse(any(step.get('uses', '').startswith('actions/upload-artifact@') for step in build['steps']))
+        self.assertNotIn('secrets.', str(build))
+        self.assertNotIn('deploy-aur', str(build))
+        self.assertNotIn('makepkg', str(publish))
+        self.assertIn("needs.build.result == 'success'", publish['if'])
+        self.assertIn("needs.update.result == 'success'", publish['if'])
+
     def test_test_workspace_excludes_git_directories_and_credential_files(self):
         step = workflow_step('astrbot-desktop-bin.yml', 'Prepare isolated test workspace')
         script = textwrap.dedent(step.split('        run: |\n', 1)[1])
@@ -43,11 +69,13 @@ class WorkflowIsolationTests(unittest.TestCase):
     def test_build_checkouts_do_not_persist_credentials(self):
         for filename in ('astrbot-desktop-bin.yml', 'build-astrbot-desktop-bin.yml', 'pixelterm-update.yml'):
             with self.subTest(filename=filename):
-                blocks = re.findall(r'(?m)^      - uses: actions/checkout@[^\n]*\n((?:        .*\n)*)',
-                                    (WORKFLOWS / filename).read_text())
-                self.assertTrue(blocks)
-                for block in blocks:
-                    self.assertIn('persist-credentials: false', block)
+                workflow = yaml.safe_load((WORKFLOWS / filename).read_text())
+                checkouts = [step for job in workflow['jobs'].values()
+                             for step in job.get('steps', [])
+                             if step.get('uses', '').startswith('actions/checkout@')]
+                self.assertTrue(checkouts)
+                for step in checkouts:
+                    self.assertIs((step.get('with') or {}).get('persist-credentials'), False)
 
     def test_release_request_exports_only_validated_public_tag(self):
         step = workflow_step('pixelterm-update.yml', 'Resolve PixelTerm release without exposing credentials to builds')

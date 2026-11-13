@@ -192,7 +192,7 @@ fi
         self.assertIn('actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683', pixelterm)
         self.assertNotIn('aur-update-queue', pixelterm)
         self.assertNotIn('PixelTerm-Rebuild-Requests', pixelterm)
-        self.assertNotIn('needs:', pixelterm)
+        self.assertNotIn('needs:', workflow_job(pixelterm, 'update'))
         self.assertNotIn('rebuild_current', pixelterm)
         self.assertIn('uses: ./.github/workflows/publish-astrbot-desktop-bin.yml', astrbot_update)
         self.assertIn('secrets: inherit', astrbot_update)

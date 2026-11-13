@@ -17,8 +17,11 @@ version starts at pkgrel=1. Otherwise use the higher of AUR pkgrel+1 (when the
 record changes) and the matching committed template revision. Identical records
 preserve pkgrel, and identical generated packaging skips compilation.
 
-Preparation builds changed packaging with makepkg, installs build dependencies,
-and runs the PKGBUILD startup checks before deployment. Deployment must still
+Preparation generates metadata only and uploads an immutable package/snapshot
+artifact before any source build. Changed packaging is built from a disposable
+copy on a separate credential-free runner, with startup checks. That job uploads
+no artifacts. Publishing runs on a fresh runner and downloads the original
+preparation artifact; it never consumes build-modified files. Deployment must still
 match the AUR commit observed during preparation. Preserve existing triggers,
 credentials, and main-only publishing. AUR consumers rebuild on their next update;
 this does not remotely replace installed binaries or detect ARM-only changes.

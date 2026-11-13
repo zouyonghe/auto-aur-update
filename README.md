@@ -102,9 +102,13 @@ and numeric tag before exporting it. No token is passed to this public request.
 - A missing legacy record triggers one baseline rebuild. Unchanged records keep
   the revision; identical packaging skips compilation. Compatible dependency
   updates also trigger rebuilds: this is package-version detection, not ABI analysis.
-- Failed queries, malformed records, or failed builds stop publication. Changed
-  packaging is clean-built with dependencies and checked using `--version` and
-  `--help`. Deployment rejects an AUR commit changed since preparation.
+- Failed queries, malformed records, or failed builds stop publication. Preparation
+  uploads an immutable `pixelterm-prepared` artifact before source builds run.
+  A separate credential-free runner clean-builds a disposable copy and checks
+  `--version` and `--help`; it uploads no artifacts. A fresh publishing runner
+  downloads the original preparation artifact by its immutable numeric ID,
+  never a build-produced file or a replacement artifact with the same name.
+  Deployment rejects an AUR commit changed since preparation.
 - Old template marker-like comments are removed before writing exactly one
   canonical installed-dependency record; malformed published records still fail.
 - The published PKGBUILD is the durable baseline, updated only after successful
@@ -119,6 +123,10 @@ through their AUR helper; no installed binary is remotely replaced.
 MuPDF's update from `libmupdf.so.28.5` to `libmupdf.so.28.6` illustrates why
 this is needed: existing executables retain the old SONAME. Reinstalling a cached
 package does not relink them.
+
+Developer tests require PyYAML (`python-yaml` on Arch), in addition to Python.
+Run `python3 -m unittest discover -s tests -v`. Checkout credential assertions
+parse YAML values, so commented settings or quoted `"false"` cannot satisfy them.
 
 For an immediate local repair after a full system upgrade, clean-build instead
 of reusing a cached package:

@@ -26,6 +26,9 @@ jobs:
        (github.event_name == 'schedule' && github.event.schedule == '30 2 * * *'))
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    outputs:
+      build_required: ${{ steps.prepared.outputs.build_required }}
+      artifact_id: ${{ steps.snapshot.outputs.artifact-id }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -56,6 +59,65 @@ jobs:
           pkgname: pixelterm-c
           pkgdir: pixelterm-c
 
+      - name: Record build decision
+        id: prepared
+        run: |
+          required="$(cat pixelterm-c/build-required)"
+          [[ "$required" == true || "$required" == false ]] || exit 1
+          printf 'build_required=%s\n' "$required" >> "$GITHUB_OUTPUT"
+
+      - name: Protect prepared deployment snapshot
+        id: snapshot
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: pixelterm-prepared
+          path: |
+            pixelterm-c/PKGBUILD
+            pixelterm-c/.aur-revision
+          include-hidden-files: true
+          if-no-files-found: error
+
+  build:
+    needs: update
+    if: needs.update.outputs.build_required == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container: archlinux:base-devel
+    steps:
+      - name: Install isolated build tools
+        run: pacman -Syu --noconfirm --needed git diffutils
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          artifact-ids: ${{ needs.update.outputs.artifact_id }}
+          merge-multiple: true
+          path: prepared
+      - name: Build disposable source workspace without publishing credentials
+        run: |
+          useradd --create-home builder
+          echo 'builder ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/builder
+          runuser -u builder -- bash scripts/build-pixelterm.sh prepared
+
+  publish:
+    needs: [update, build]
+    if: >-
+      always() && github.ref == 'refs/heads/main' &&
+      needs.update.result == 'success' &&
+      (needs.build.result == 'success' ||
+       (needs.build.result == 'skipped' && needs.update.outputs.build_required == 'false'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          artifact-ids: ${{ needs.update.outputs.artifact_id }}
+          merge-multiple: true
+          path: pixelterm-c
       - name: Publish PixelTerm package
         uses: ./.github/actions/deploy-aur
         with:

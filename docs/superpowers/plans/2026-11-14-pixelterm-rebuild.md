@@ -6,8 +6,9 @@
 **Goal:** Automatically publish a higher pkgrel when libmupdf or ffmpeg changes.
 
 **Architecture:** Reconcile dependencies, then record installed Arch versions in a data-only PKGBUILD
-comment. Compare against AUR, build changed packaging, and pass its AUR snapshot
-to the existing guarded deployment action.
+comment. Compare against AUR, upload trusted preparation inputs, build changed
+packaging on a disposable runner, and pass the original artifact to guarded
+deployment on a fresh runner. Build jobs cannot return deployment inputs.
 
 **Tech Stack:** Bash, pacman, makepkg, Python unittest, GitHub Actions.
 
@@ -68,20 +69,18 @@ Do not dispatch publishing workflows or merge.
   sandbox="$(mktemp -d)"
   mkdir -p "$sandbox/scripts" "$sandbox/pixelterm-c"
   cp scripts/pixelterm-c.sh "$sandbox/scripts/"
+  cp scripts/build-pixelterm.sh "$sandbox/scripts/"
   cp pixelterm-c/PKGBUILD "$sandbox/pixelterm-c/"
   bash "$sandbox/scripts/pixelterm-c.sh"
-  binary="$sandbox/pixelterm-c/pkg/pixelterm-c/usr/bin/pixelterm"
-  if [ ! -x "$binary" ]; then
-    (cd "$sandbox/pixelterm-c" && makepkg --cleanbuild --syncdeps --check --force)
-  fi
-  "$binary" --version
-  readelf -d "$binary"
+  bash "$sandbox/scripts/build-pixelterm.sh" "$sandbox/pixelterm-c"
   ```
 
   This reads live upstream/AUR state, so generated versions and SONAMEs will
-  change. If packaging is already identical to AUR, the updater skips building;
-  the executable check then forces a verification build before inspecting it.
-  Any updater or forced-build failure stops the commands before inspection.
+  change. The second command deliberately forces a verification build even when
+  preparation reports no changes. It runs startup checks within makepkg and
+  deletes all source/build outputs when finished; there is no packaged binary
+  to inspect afterward. CI uses different disposable runners for these commands
+  and a third fresh runner for publishing the original preparation artifact.
 - Bash syntax and git whitespace checks passed. ShellCheck passed the updater;
   the container entrypoint retains pre-existing SC2034 (`pkgdir` unused).
 - No PixelTerm system-package installation, publishing-workflow dispatch, AUR publication,

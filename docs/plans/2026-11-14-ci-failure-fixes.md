@@ -83,8 +83,37 @@ commands referenced by the generic CI/PR skills.
 - 101 tests pass on the host and isolated deploy-image workspace. Preparation-image
   build and real cmp checks passed. Temporary mutation probes catch reverting the
   installed query, template cleanup, and version-probe exit-status guard.
-- An additional fresh-container full updater run successfully installed/reconciled
-  dependencies and reached makepkg, but GitHub's source download ended with curl
-  56 (TLS unexpected EOF) before compilation. This run did not establish a fresh
+- An additional fresh-container run (before the build-job split) installed/
+  reconciled dependencies and completed the updater's initial archive download
+  and checksum. The log then printed `==> Making package: pixelterm-c 1.8.6-2`
+  and `==> Retrieving sources...`: makepkg's separate source download ended with
+  curl 56 (TLS unexpected EOF) before compilation. This run did not establish a fresh
   full PixelTerm build result. The real minimal makepkg probe did reject expected
   version text with exit 1 (makepkg status 4). No host packages were changed.
+
+## Source-build deployment boundary
+
+- Source code no longer executes in the preparation script/action. Preparation
+  generates metadata and a build decision, then uploads the protected
+  `pixelterm-prepared` artifact containing PKGBUILD and the observed AUR commit.
+- A separate, credential-free build job downloads that artifact and invokes
+  `scripts/build-pixelterm.sh`. The script builds only a temporary PKGBUILD copy,
+  checks installed-version consistency, and deletes build outputs. The job
+  uploads nothing. Its entire VM/container is disposable, including sudo access.
+- Publication waits for successful preparation and a successful required build
+  (or an explicit no-op), starts on a fresh runner, and downloads the original
+  preparation artifact pinned by its numeric artifact ID, not a mutable name.
+  Neither a writable copy nor an attacker-created replacement artifact
+  from the source build can become a deployment input.
+- Test checkout assertions now parse workflow YAML using PyYAML and require the
+  actual boolean false; the required python-yaml tooling is installed in CI test
+  images. The token-bearing fixture forces a changed package and asserts the
+  build shim ran, not merely that the logs contained no token.
+- The hostile-build test overwrites PKGBUILD and creates a forged AUR revision
+  in its disposable build directory; the prepared package/snapshot remain intact.
+  Workflow assertions verify no artifact upload or publishing credentials in the
+  build job and that publication downloads the preparation artifact.
+- 104 tests pass on the host and inside the rebuilt deploy image (including
+  python-yaml). ShellCheck and workflow YAML/embedded Bash checks pass. Mutation
+  probes replacing credential settings with comments and skipping the forced
+  token-bearing build both fail the corresponding tests as intended.

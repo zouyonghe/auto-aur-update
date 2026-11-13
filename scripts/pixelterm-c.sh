@@ -145,14 +145,9 @@ makepkg --printsrcinfo > .SRCINFO
 comparison_status=0
 cmp -s PKGBUILD "$aur_dir/package/PKGBUILD" || comparison_status=$?
 case "$comparison_status" in
-    0) echo "Package and dependency versions unchanged; skipping build" ;;
-    1) makepkg --cleanbuild --syncdeps --check --noconfirm --force ;;
+    0) echo false > build-required; echo "Package and dependency versions unchanged; skipping build" ;;
+    1) echo true > build-required ;;
     *) echo "Failed to compare PKGBUILD; check diffutils and file access." >&2; exit 1 ;;
 esac
-if ! built_dependency_record=$(installed_dependency_record) ||
-   [[ "$built_dependency_record" != "$dependency_record" ]]; then
-    echo "Dependency versions changed during build; refusing stale marker" >&2
-    exit 1
-fi
 
 cd -

@@ -26,7 +26,7 @@ class PixelTermUpdateTests(unittest.TestCase):
                    query_status='0', build_status='0', identical=False, token='',
                    release_tag='', published_marker=None, cmp_status=None,
                    template_marker='', reconcile_status='0', after_build_deps=None,
-                   after_build_query_status='0'):
+                   after_build_query_status='0', run_source_build=True):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             bin_dir = root / 'bin'
@@ -42,6 +42,8 @@ class PixelTermUpdateTests(unittest.TestCase):
                 + template_marker
             )
             (scripts_dir / SCRIPT.name).write_text(SCRIPT.read_text())
+            build_script = scripts_dir / 'build-pixelterm.sh'
+            build_script.write_text((ROOT / 'scripts/build-pixelterm.sh').read_text())
 
             commands = {
                 'git': '''#!/bin/bash
@@ -93,8 +95,8 @@ echo 0
 set -eu
 test -z "${GH_TOKEN:-}${GITHUB_TOKEN:-}"
 if [[ $1 != --printsrcinfo ]]; then
-  printf '%s\\n' "$*" >> build-calls
-  touch built
+  printf '%s\\n' "$*" >> "$TEST_PACKAGE_DIR/build-calls"
+  touch "$TEST_PACKAGE_DIR/built"
   exit "$BUILD_STATUS"
 fi
 pkgver=$(/usr/bin/sed -n 's/^[[:space:]]*pkgver=//p' PKGBUILD)
@@ -104,16 +106,16 @@ printf 'pkgver = %s\\npkgrel = %s\\n' "$pkgver" "$pkgrel"
                 'pacman': '''#!/bin/bash
 set -eu
 if [[ "$*" == '-Su --needed --noconfirm libmupdf ffmpeg' ]]; then
-  touch reconciled
+  touch "$TEST_PACKAGE_DIR/reconciled"
   exit "$RECONCILE_STATUS"
 fi
 if [[ $1 == -Sp ]]; then echo libmupdf=99; echo ffmpeg=99; exit; fi
 [[ "$*" == '-Q libmupdf ffmpeg' ]]
-test -e reconciled
+test -e "$TEST_PACKAGE_DIR/reconciled"
 values=$DEPENDENCIES
-if [[ -e built ]]; then values=$AFTER_BUILD_DEPS; fi
+if [[ -e $TEST_PACKAGE_DIR/built ]]; then values=$AFTER_BUILD_DEPS; fi
 printf '%s\\n' "$values" | tr ' ' '\\n' | tr '=' ' '
-if [[ -e built ]]; then exit "$AFTER_BUILD_QUERY_STATUS"; fi
+if [[ -e $TEST_PACKAGE_DIR/built ]]; then exit "$AFTER_BUILD_QUERY_STATUS"; fi
 exit "$QUERY_STATUS"
 ''',
                 'sudo': '#!/bin/sh\nexec "$@"\n',
@@ -154,6 +156,7 @@ exec /usr/bin/sed "$@"
                 'RECONCILE_STATUS': reconcile_status,
                 'AFTER_BUILD_DEPS': dependencies if after_build_deps is None else after_build_deps,
                 'AFTER_BUILD_QUERY_STATUS': after_build_query_status,
+                'TEST_PACKAGE_DIR': str(package_dir),
             }
             result = subprocess.run(
                 ['bash', str(scripts_dir / SCRIPT.name)],
@@ -162,6 +165,10 @@ exec /usr/bin/sed "$@"
                 text=True,
                 capture_output=True,
             )
+            # Mirror the workflow: source builds consume a separate job's copy.
+            if run_source_build and result.returncode == 0 and (package_dir / 'build-required').read_text().strip() == 'true':
+                result = subprocess.run(['bash', str(build_script), str(package_dir)],
+                                        cwd=package_dir, env=environment, text=True, capture_output=True)
             if expect_success:
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             else:
@@ -176,12 +183,21 @@ exec /usr/bin/sed "$@"
             self.last_api_request = ((package_dir / 'api-request').read_text()
                                      if (package_dir / 'api-request').exists() else '')
             self.last_output = result.stdout + result.stderr
+            self.last_build_required = (package_dir / 'build-required').read_text().strip()
             return package, metadata
 
     def test_inherited_tokens_do_not_reach_makepkg(self):
-        self.run_update('8', token='test-workflow-token')
+        self.run_update('8', token='test-workflow-token', published_deps='')
+        self.assertIn('--check', self.last_builds.split())
+        self.assertEqual(len(self.last_builds.splitlines()), 1)
         self.assertNotIn('Authorization:', self.last_api_request)
         self.assertNotIn('test-workflow-token', self.last_output)
+
+    def test_preparation_only_emits_build_decision_without_source_execution(self):
+        self.run_update('8', published_deps='', run_source_build=False)
+        self.assertEqual(self.last_build_required, 'true')
+        self.assertEqual(self.last_builds, '')
+        self.assertEqual(self.last_revision, '0' * 39 + '1\n')
 
     def test_pre_resolved_release_tag_skips_api_request(self):
         package, _ = self.run_update('8', release_tag='v1.9.0')

@@ -6,7 +6,7 @@ RUN pacman -S --noconfirm --needed --overwrite '*' \
       git fakeroot binutils gcc awk binutils xz \
       libarchive bzip2 coreutils diffutils file findutils \
       gettext grep gzip sed ncurses util-linux \
-      pacman-contrib debugedit python curl jq
+      pacman-contrib debugedit python python-yaml curl jq
 RUN command -v cmp
 
 COPY entrypoint.sh /entrypoint.sh

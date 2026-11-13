@@ -24,7 +24,7 @@ jobs:
       source_sha: ${{ inputs.source_sha }}
     steps:
       - name: Install test tools
-        run: pacman -Syu --noconfirm --needed git python openssh
+        run: pacman -Syu --noconfirm --needed git python python-yaml openssh
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ inputs.source_sha }}
