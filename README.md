@@ -4,11 +4,15 @@ Update the program in aur warehouse automatically
 ## AstrBot desktop
 
 `astrbot-desktop-bin` repackages the official stable Debian binaries for
-`x86_64` and `aarch64`. PixelTerm-C keeps its existing updater and build action.
+`x86_64` and `aarch64`. PixelTerm-C's `build-aur-action` prepares metadata only;
+it no longer compiles source or produces a built package. Source compilation and
+startup checks must run separately using `scripts/build-pixelterm.sh` on a
+disposable runner; `pixelterm-update.yml` wires these jobs together safely.
 
 - `.github/workflows/pixelterm-update.yml` updates PixelTerm-C at 02:30 UTC and supports a
   manual dispatch and owner-only repository-watch trigger. It serializes AUR publishes and is
-  idempotent when the package is already current. For a dependency ABI or packaging-only rebuild,
+  idempotent when the package is already current. Dependency updates trigger rebuilds
+  automatically (see below). For a manual packaging-only rebuild,
   set `pkgver` in `pixelterm-c/PKGBUILD` to the current AUR version and increase `pkgrel` above
   the published revision. Commit both values, then dispatch the workflow from `main`.
 - `.github/workflows/astrbot-update.yml` updates AstrBot at 03:45 UTC and supports a manual
@@ -26,8 +30,8 @@ Update the program in aur warehouse automatically
   credentials.
 - The updater requires both release assets and their GitHub SHA256 digests;
   makepkg downloads and verifies the actual files before publishing.
-- PixelTerm-C starts a new upstream version at `pkgrel=1`. For a same-version
-  dependency ABI or packaging-only rebuild, first align the committed `pkgver`
+- PixelTerm-C starts a new upstream version at `pkgrel=1`. For a manual same-version
+  packaging-only rebuild, first align the committed `pkgver`
   with AUR, then set `pkgrel` higher than AUR's current revision. A template's
   revision applies only to its own upstream version; older template revisions
   are ignored. AstrBot preserves higher committed/AUR revisions.
@@ -70,3 +74,110 @@ Validation: `python3 -m unittest discover -s tests -v`, then `makepkg` from
 `astrbot-desktop-bin/` on Arch. CI repacks ARM binaries on an x86_64 runner;
 this validates archives/checksums, not native ARM execution or Wayland GUI.
 Install/upgrade through your AUR helper rather than the AppImage updater.
+
+PR validation also builds the actual deployment Docker image, checks both
+equal/different-file comparisons, and runs the test suite inside it without AUR
+credentials. The image explicitly installs `diffutils` for `cmp`: a fuller local
+test environment previously hid
+this missing dependency. Comparator failures now report a tool/access error,
+not a false packaging-change error; genuine changes still require higher pkgrel.
+Test checkouts do not persist credentials; container tests mount an isolated
+read-only copy excluding `.git` directories and worktree credential pointers.
+
+## PixelTerm-C dependency rebuilds
+
+Every scheduled/manual update refreshes the Arch system, reconciles `libmupdf`
+and `ffmpeg` against that database snapshot, then reads their installed versions,
+including epochs and package revisions. The installed versions are checked again
+after building; drift or query failure prevents publication.
+It compares them with a `# rebuild-deps:` comment in the published AUR PKGBUILD;
+no upstream or dependency version is hardcoded in the detector.
+An isolated workflow step queries the release API using its read-only GitHub
+token and passes only the validated public release tag to the updater. Neither
+the updater nor upstream build tools receive the token. Local runs query public
+endpoints without authentication and retain fallbacks.
+If the authenticated API fails or returns an invalid tag, release resolution
+falls back to the public latest-release redirect and validates its host, project,
+and numeric tag before exporting it. No token is passed to this public request.
+
+Updater and makepkg HTTP downloads use a 10-second connection timeout,
+180-second transfer limit, and at most two retries (5-second delay, 240-second
+retry window). Dependency transactions and initial build-tool installation have
+three attempts capped at 180 seconds each, with 5/10-second backoff. Required
+build dependencies are installed before makepkg; source compilation itself is
+never automatically retried. Persistent failures still fail closed. A terminated
+pacman transaction may require inspection of its lock/state; no lock is removed
+automatically to force a retry.
+Updater Git HTTPS operations (AUR clone and the fallback `git ls-remote` tag
+lookup) have three attempts, a 60-second deadline per attempt, and 5/10-second
+backoff. This does not apply to curl API/redirect requests: updater curl uses
+the 180-second policy above, while the workflow's public release redirect has
+a 60-second total deadline. Partial clones and failed Git stdout are discarded
+before retrying. The internal Git helper requires an explicit clone destination;
+it supports the caller's `--quiet`/`--depth=N` flags, not every git clone option.
+
+- Changed dependencies automatically increment AUR's final numeric `pkgrel`
+  component (`8` → `9`, `1.9` → `1.10`). Both AUR and template revisions accept
+  makepkg's `integer[.integer]` format; `vercmp` verifies forward progress.
+  A higher explicit template revision wins; new upstream releases start at `1`.
+- A missing legacy record triggers one baseline rebuild. Unchanged records keep
+  the revision; identical packaging skips compilation. Compatible dependency
+  updates also trigger rebuilds: this is package-version detection, not ABI analysis.
+- Failed queries, malformed records, or failed builds stop publication. Preparation
+  uploads an immutable `pixelterm-prepared` artifact before source builds run.
+  A separate credential-free runner clean-builds a disposable copy and checks
+  `--version` and `--help`; it uploads no artifacts. A fresh publishing runner
+  downloads the original preparation artifact by its immutable numeric ID,
+  never a build-produced file or a replacement artifact with the same name.
+  Deployment rejects an AUR commit changed since preparation.
+  The preparation artifact also records its source SHA. Publication requires
+  that SHA to match the checkout and current `main`, checks it before loading
+  publishing credentials, and checks again immediately before push/no-op success.
+  Even unrelated new main commits require a fresh run; a small final read-to-push
+  race remains because GitHub and AUR cannot be locked atomically.
+  A publish-only retry succeeds without pushing if the remote tree contains
+  exactly the prepared PKGBUILD and its regenerated `.SRCINFO`, byte-for-byte.
+  Assets, post-processing, checksum rewrites, requested `test: true` checks,
+  extra files, or different contents keep the stale-snapshot rejection; any
+  release verifier still must pass. The remote HEAD is rechecked immediately
+  before reporting no-op success. A concurrent change or failed query rejects
+  the retry; another writer can still update AUR after that final observation.
+- Old template marker-like comments are removed before writing exactly one
+  canonical installed-dependency record; malformed published records still fail.
+- Equivalent upstream version spellings that change `pkgver` text still increase
+  `pkgrel` (for example `1.8.6` to `01.8.6`), so changed sources/URLs can publish.
+- If PKGBUILD is unchanged but AUR `.SRCINFO` is stale, preparation identifies
+  a metadata-only repair without rebuilding. Deployment permits it without a
+  version bump only when `.SRCINFO` is the sole changed regular file and its bytes
+  exactly match metadata regenerated from the staged PKGBUILD. Other changes
+  continue to require a higher package version or revision.
+- The published PKGBUILD is the durable baseline, updated only after successful
+  publication. No GitHub cache or manual revision commit is needed for dependency
+  changes. Existing explicit revision requests remain supported.
+
+The scheduled detector runs on x86_64 Arch. ARM-only repository changes are not
+detected, and ARM execution is not tested. The daily schedule may lag repository
+updates or be delayed by GitHub. Installations rebuild only when users update
+through their AUR helper; no installed binary is remotely replaced.
+
+MuPDF's update from `libmupdf.so.28.5` to `libmupdf.so.28.6` illustrates why
+this is needed: existing executables retain the old SONAME. Reinstalling a cached
+package does not relink them.
+
+Developer tests require Python, PyYAML (`python-yaml` on Arch), OpenSSH
+(`openssh`, for `ssh-keygen`), Git, Bash, and `makepkg` (provided by `pacman`).
+Run `python3 -m unittest discover -s tests -v`. Checkout credential assertions
+parse YAML values, so commented settings or quoted `"false"` cannot satisfy them.
+
+For an immediate local repair after a full system upgrade, clean-build instead
+of reusing a cached package:
+
+```sh
+git clone https://aur.archlinux.org/pixelterm-c.git
+cd pixelterm-c
+makepkg --cleanbuild --syncdeps --check --install
+pixelterm --version
+```
+
+Rebuild again when MuPDF or FFmpeg changes its required SONAME. Never symlink
+an old SONAME to a different library version to bypass the loader error.

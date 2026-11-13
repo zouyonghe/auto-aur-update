@@ -1,8 +1,16 @@
 #!/bin/bash
 
+set -o errexit -o nounset -o pipefail
+
+unset GH_TOKEN GITHUB_TOKEN
+
 pkgdir=$1
 pkgname=$2
 rebuild_current=${3:-false}
+if [[ ! "$pkgname" =~ ^[a-z0-9][a-z0-9@._+-]*$ ]]; then
+    echo 'Invalid package name' >&2
+    exit 1
+fi
 
 case "$rebuild_current" in
     false) ;;
@@ -22,9 +30,9 @@ chown -R builder:builder .
 chmod -R a+rw .
 
 pacman-key --init
-pacman -Sy --noconfirm &&
+bash scripts/retry-pacman.sh -Syu --noconfirm
 
 # 切换到 builder 用户执行脚本
-su - builder -c "cd /github/workspace && bash scripts/${pkgname}.sh"
+runuser --user builder -- bash "/github/workspace/scripts/${pkgname}.sh"
 
 #echo OK

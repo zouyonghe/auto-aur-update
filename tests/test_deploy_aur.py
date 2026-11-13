@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -51,7 +52,11 @@ def workflow_concurrency(text):
 
 
 class CloneTests(unittest.TestCase):
-    def run_clone(self, *, empty=True, fail=False, force=False, expected=None, api_count='1'):
+    def run_clone(self, *, empty=True, fail=False, force=False, expected=None, api_count='1',
+                  published=None, metadata='metadata\n', extra_file=False, assets='',
+                  post_process='', updpkgsums='false', verifier_status=None,
+                  metadata_status='0', compare_status=None, executable=False,
+                  requested_test='false', advance_remote=False, remote_query_status='0'):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             remote = root / 'remote.git'
@@ -61,6 +66,14 @@ class CloneTests(unittest.TestCase):
             if not empty:
                 seed = root / 'seed'
                 subprocess.run([real_git, 'clone', str(remote), str(seed)], check=True, capture_output=True)
+                if published is not None:
+                    (seed / 'PKGBUILD').write_text(published)
+                    (seed / '.SRCINFO').write_text(metadata)
+                    if executable:
+                        (seed / 'PKGBUILD').chmod(0o755)
+                    if extra_file:
+                        (seed / 'extra').write_text('unexpected')
+                    subprocess.run([real_git, '-C', str(seed), 'add', '.'], check=True, capture_output=True)
                 subprocess.run([real_git, '-C', str(seed), '-c', 'user.name=Test',
                                 '-c', 'user.email=test@example.org', 'commit', '--allow-empty',
                                 '-m', 'existing history'], check=True, capture_output=True)
@@ -69,6 +82,13 @@ class CloneTests(unittest.TestCase):
             shim = root / 'git'
             shim.write_text('''#!/bin/bash
 set -eu
+if [[ " $* " == *" ls-remote "* ]]; then
+  [[ "$REMOTE_QUERY_STATUS" == 0 ]] || exit "$REMOTE_QUERY_STATUS"
+  if [[ "$ADVANCE_REMOTE" == true ]]; then
+    "$REAL_GIT" -C "$TEST_SEED" -c user.name=Test -c user.email=test@example.org commit --allow-empty -m concurrent >/dev/null
+    "$REAL_GIT" -C "$TEST_SEED" push origin master >/dev/null 2>&1
+  fi
+fi
 if [[ " $* " == *" clone "* ]]; then
   [[ " $* " == *" ssh://aur@aur.archlinux.org/test-package.git "* ]] || exit 65
   if [[ $SIMULATE_FAILURE == true ]]; then
@@ -100,6 +120,17 @@ else
 fi
 ''')
             jq_shim.chmod(0o755)
+            incoming = root / 'incoming'
+            incoming.write_text('pkgver=1.8.6\npkgrel=2\n')
+            makepkg = root / 'makepkg'
+            makepkg.write_text('#!/bin/sh\n[ "$*" = --printsrcinfo ] || exit 99\n[ "$(cat PKGBUILD)" = "$(cat "$INCOMING")" ] || exit 99\nprintf "metadata\\n"\nexit "$METADATA_STATUS"\n')
+            makepkg.chmod(0o755)
+            if compare_status is not None:
+                comparator = root / 'cmp'
+                comparator.write_text(f'#!/bin/sh\nexit {compare_status}\n')
+                comparator.chmod(0o755)
+            verifier = root / 'verify.py'
+            verifier.write_text('import sys\nraise SystemExit(' + str(verifier_status or 0) + ')\n')
             block = SCRIPT.read_text().split("echo '::group::Cloning AUR package into /tmp/local-repo'", 1)[1]
             block = block.split("echo '::group::Copying files into /tmp/local-repo'", 1)[0]
             target = root / 'checkout'
@@ -109,10 +140,20 @@ fi
             env = {**os.environ, 'PATH': str(root) + os.pathsep + os.environ['PATH'],
                    'REAL_GIT': real_git, 'TEST_REMOTE': str(remote),
                    'SIMULATE_FAILURE': str(fail).lower(), 'AUR_COUNT': api_count,
+                   'INCOMING': str(incoming),
+                   'METADATA_STATUS': metadata_status,
+                   'ADVANCE_REMOTE': str(advance_remote).lower(), 'TEST_SEED': str(root / 'seed'),
+                   'REMOTE_QUERY_STATUS': remote_query_status,
                    'SIMULATE_API_FAILURE': str(api_count == 'api-failure').lower(),
                    'AUR_COUNT_JSON': ('{"type":"error","resultcount":0}' if api_count == 'rpc-error'
                                      else '{"type":"multiinfo","resultcount": ' + api_count + '}')}
             setup = '\n'.join(['set -euo pipefail', 'pkgname=test-package',
+                               'pkgbuild=$INCOMING',
+                               f'assets={shlex.quote(assets)}',
+                               f'post_process={shlex.quote(post_process)}',
+                               f'updpkgsums={updpkgsums}',
+                               f'test={requested_test}',
+                               f'release_verifier={verifier if verifier_status is not None else ""}',
                                f"expected_revision_file='{revision_file if expected else ''}'",
                                f'force_push={str(force).lower()}', block])
             result = subprocess.run(['bash', '-c', setup], env=env, text=True, capture_output=True)
@@ -120,6 +161,38 @@ fi
             branch = subprocess.run([real_git, '-C', str(target), 'symbolic-ref', '--short', 'HEAD'],
                                     text=True, capture_output=True).stdout.strip() if exists else None
             return result, exists, branch
+
+    def test_successful_publish_retry_accepts_only_exact_remote_package(self):
+        result, _, _ = self.run_clone(empty=False, expected='old-commit',
+                                      published='pkgver=1.8.6\npkgrel=2\n')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('already published', result.stdout)
+
+    def test_retry_rejects_changed_package_metadata_or_extra_files(self):
+        for values in ({'published': 'pkgver=1.8.6\npkgrel=3\n'},
+                       {'metadata': 'different\n'}, {'extra_file': True},
+                       {'assets': 'LICENSE'}, {'post_process': 'true'},
+                       {'updpkgsums': 'true'}, {'verifier_status': 1},
+                       {'metadata_status': '1'}, {'compare_status': 2},
+                       {'executable': True}):
+            with self.subTest(values=values):
+                settings = {'published': 'pkgver=1.8.6\npkgrel=2\n', **values}
+                result, _, _ = self.run_clone(empty=False, expected='old-commit', **settings)
+                self.assertNotEqual(result.returncode, 0)
+
+    def test_retry_does_not_skip_requested_build_test(self):
+        result, _, _ = self.run_clone(empty=False, expected='old-commit',
+                                      published='pkgver=1.8.6\npkgrel=2\n', requested_test='true')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn('already published', result.stdout)
+
+    def test_retry_revalidates_remote_after_content_comparison(self):
+        for values in ({'advance_remote': True}, {'remote_query_status': '1'}):
+            with self.subTest(values=values):
+                result, _, _ = self.run_clone(empty=False, expected='old-commit',
+                                              published='pkgver=1.8.6\npkgrel=2\n', **values)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn('already published', result.stdout)
 
     def test_pull_request_workflow_contains_no_publish_secrets(self):
         self.assertNotIn('secrets.AUR_', WORKFLOW.read_text())
@@ -192,7 +265,7 @@ fi
         self.assertIn('actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683', pixelterm)
         self.assertNotIn('aur-update-queue', pixelterm)
         self.assertNotIn('PixelTerm-Rebuild-Requests', pixelterm)
-        self.assertNotIn('needs:', pixelterm)
+        self.assertNotIn('needs:', workflow_job(pixelterm, 'update'))
         self.assertNotIn('rebuild_current', pixelterm)
         self.assertIn('uses: ./.github/workflows/publish-astrbot-desktop-bin.yml', astrbot_update)
         self.assertIn('secrets: inherit', astrbot_update)
@@ -319,7 +392,7 @@ class DeploymentTests(unittest.TestCase):
             committed = subprocess.check_output(['git', '-C', directory, 'show', 'HEAD:PKGBUILD'], text=True)
             self.assertEqual(committed, 'pkgname=test-package\n')
 
-    def copy_package(self, existing, incoming, *, accepted=False):
+    def copy_package(self, existing, incoming, *, accepted=False, cmp_status=None):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             clone = root / 'clone'
@@ -333,6 +406,10 @@ first=$(printf '%s\\n%s\\n' "$1" "$2" | sort -V | head -n1)
 if [[ "$first" == "$1" ]]; then echo -1; else echo 1; fi
 ''')
             vercmp.chmod(0o755)
+            if cmp_status is not None:
+                comparator = bin_dir / 'cmp'
+                comparator.write_text(f'#!/bin/sh\nexit {cmp_status}\n')
+                comparator.chmod(0o755)
             (clone / 'PKGBUILD').write_text(existing)
             source = root / 'incoming'
             source.write_text(incoming)
@@ -346,6 +423,20 @@ if [[ "$first" == "$1" ]]; then echo -1; else echo 1; fi
                              result.stdout + result.stderr)
             return result
 
+    def test_identical_same_revision_package_is_accepted(self):
+        package = 'pkgver=1.8.6\npkgrel=1\n'
+        result = self.copy_package(package, package, accepted=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_comparison_tool_failure_is_not_reported_as_package_change(self):
+        package = 'pkgver=1.8.6\npkgrel=1\n'
+        for status in (2, 127):
+            with self.subTest(status=status):
+                result = self.copy_package(package, package, cmp_status=status)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('Failed to compare PKGBUILD', result.stderr)
+                self.assertNotIn('strictly higher pkgrel', result.stderr)
+
     def test_malicious_pkgrel_is_rejected_before_sed_or_vercmp(self):
         incoming = 'pkgver=4.29.1\npkgrel=1\n'
         for payload in ('99/e touch /tmp/not-allowed', '9; touch /tmp/not-allowed', '$(id)', '9\npkgrel=10'):
@@ -355,10 +446,12 @@ if [[ "$first" == "$1" ]]; then echo -1; else echo 1; fi
                 self.assertIn('Invalid pkgrel', result.stderr)
 
     def test_same_version_changed_content_requires_higher_revision(self):
-        result = self.copy_package('pkgver=4.29.1\npkgrel=2\n# new AUR content\n',
-                                   'pkgver=4.29.1\npkgrel=1\n# stale incoming content\n')
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn('strictly higher pkgrel', result.stderr)
+        for revision in ('1', '2'):
+            with self.subTest(revision=revision):
+                result = self.copy_package('pkgver=4.29.1\npkgrel=2\n# new AUR content\n',
+                                           f'pkgver=4.29.1\npkgrel={revision}\n# stale incoming content\n')
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('strictly higher pkgrel', result.stderr)
 
     def test_higher_revision_can_publish_changed_packaging(self):
         result = self.copy_package('pkgver=4.29.1\npkgrel=2\n',
@@ -499,6 +592,10 @@ if [[ "$first" == "$1" ]]; then echo -1; else echo 1; fi
             git('init', '--initial-branch=master')
             (root / 'PKGBUILD').write_text('pkgver=4.29.1\npkgrel=1\n')
             metadata = 'pkgbase = test-package\n\tpkgver = 4.29.1\n\tpkgrel = 1\n'
+            generator = bin_dir / 'makepkg'
+            generator.write_text('#!/bin/sh\nprintf "%s" "$GENERATED_METADATA"\n')
+            generator.chmod(0o755)
+            env['GENERATED_METADATA'] = metadata + '\tpkgdesc = regenerated\n'
             (root / '.SRCINFO').write_text(metadata)
             asset = root / 'package-helper.data'
             asset.write_text('original asset')
@@ -516,7 +613,11 @@ if [[ "$first" == "$1" ]]; then echo -1; else echo 1; fi
                 block = 'if [ -n \"$post_process\" ]; then' + block
                 block = block.replace('/tmp/local-repo/', directory + '/')
                 subprocess.run(['bash', '-c', block], cwd=directory, check=True,
-                               env={**env, 'post_process': 'echo changed >> PKGBUILD'}, capture_output=True)
+                                env={**env, 'post_process': 'echo changed >> PKGBUILD'}, capture_output=True)
+            elif change == 'metadata':
+                (root / '.SRCINFO').write_text(metadata + '\tpkgdesc = regenerated\n')
+            elif change == 'invalid_metadata':
+                (root / '.SRCINFO').write_text(metadata + '\tpkgdesc = injected\n')
             if bump:
                 (root / '.SRCINFO').write_text(metadata.replace('pkgrel = 1', 'pkgrel = 2'))
                 (root / 'PKGBUILD').write_text('pkgver=4.29.1\npkgrel=2\n')
@@ -528,12 +629,17 @@ if [[ "$first" == "$1" ]]; then echo -1; else echo 1; fi
             return result, original == git('rev-parse', 'HEAD').strip()
 
     def test_final_changes_require_version_bump(self):
-        for change in ('asset', 'deleted_asset', 'post_process'):
+        for change in ('asset', 'deleted_asset', 'post_process', 'invalid_metadata'):
             with self.subTest(change=change):
                 result, unchanged = self.run_final_package(change=change)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertTrue(unchanged)
                 self.assertIn('strictly higher', result.stderr)
+
+    def test_regenerated_metadata_only_repair_does_not_require_version_bump(self):
+        result, unchanged = self.run_final_package(change='metadata')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(unchanged)
 
     def test_final_asset_change_with_bump_is_committed(self):
         result, unchanged = self.run_final_package(change='asset', bump=True)

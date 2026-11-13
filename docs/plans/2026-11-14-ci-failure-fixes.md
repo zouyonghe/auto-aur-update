@@ -1,0 +1,229 @@
+# AUR publishing CI failure fixes
+
+## Evidence
+
+Reviewed the latest 30 runs (2026-11-04 through 2026-11-13). All 19 failed
+PixelTerm/AstrBot runs reached shared deployment and failed with
+`/build.sh: line 152: cmp: command not found`, followed by the misleading
+`Changed package requires a strictly higher pkgrel` message. The deploy image
+installs neither diffutils nor base-devel. Tests ran on a fuller host, hiding
+the missing runtime dependency. Example runs: 43404883858 and 43418100631.
+
+PixelTerm run 43404883858 also received an unauthenticated GitHub API 403;
+its existing fallback succeeded, so this was not the terminal failure.
+Node 20 deprecation warnings are non-blocking and out of this focused fix.
+
+## Plan
+
+1. Exercise identical-package deployment and cmp execution errors in regression
+   tests. Distinguish real content differences from comparison tool failures.
+2. Install diffutils explicitly in the deployment image and verify cmp while
+   building it. Add a credential-free PR job building/testing the actual image.
+3. Authenticate PixelTerm release API requests in an isolated workflow step.
+   Pass only the validated public tag across the builder login; clear any
+   inherited tokens before updater/build execution. Retain public local queries.
+4. Run full unittest/shell checks and rootless container smoke tests. Review the
+   complete diff, commit the automatic-rebuild and CI fixes, and open a PR.
+   Do not merge or publish AUR packages.
+
+Use this repository's Bash/Python checks, not the Warp-specific Rust presubmit
+commands referenced by the generic CI/PR skills.
+
+## Verification and review
+
+- Reproduced missing cmp using the original deployment image built locally.
+  Rootless Podman needed host networking because this machine's proxy listens
+  on loopback; this is a local verification setting, not a CI change.
+- Fixed image built successfully; equal/different-file smoke checks passed.
+  The initial PR's 87 unit tests passed on the host and inside the deploy image.
+- Initial builder-token forwarding was removed during review: only the public
+  release tag now crosses the login boundary. PR checkouts disable persisted
+  credentials, and container tests receive a copy without Git metadata.
+- Reviewed version precedence, migration/idempotence, invalid input rejection,
+  build failure propagation, AUR commit guards, credential scope, and PR-only
+  image validation. Existing same-revision content-change guards remain intact.
+- ShellCheck passes the updater. Pre-existing entrypoint unused-pkgdir and
+  deploy-asset globbing warnings remain outside this change. Workflow YAML and
+  embedded Bash syntax were checked; Node action version migration is deferred.
+- No AUR publish, merge, ARM execution, or system package replacement performed.
+
+## Review follow-up verification
+
+- 95 tests pass on the host and inside the credential-free workspace mounted by
+  the exact updated PR container validation block.
+- The workflow workspace-copy test plants dummy credentials in `.git/config`
+  and a nested `.git` worktree file, then verifies neither reaches the copy.
+- Release-query tests validate public tag output and reject malformed/multiline
+  tags. Entrypoint and makepkg probes reject inherited GH_TOKEN/GITHUB_TOKEN.
+- Mutation probes remove --help, --cleanbuild, --check, or token clearing from
+  temporary copies; the corresponding regression tests fail for every mutation.
+- A real makepkg probe with BUILDENV=!check skips a deliberately failing check
+  without --check, but invokes it and exits 4 with --check. No package is installed.
+- Comparison errors (2/127) and noncanonical/duplicate dependency markers stop
+  the updater. Reproduction commands and historical test-count stages are
+  documented in the implementation plan instead of machine-local log paths.
+
+## Build-input and release-fallback follow-up
+
+- Reconcile tracked dependencies against the entrypoint's database snapshot,
+  record installed versions with pacman -Q, then recheck them after building.
+  Failed reconciliation/query or version drift prevents publication. A remote
+  repository change alone does not refresh pacman's local sync database; the
+  underlying correctness issue is using desired rather than installed versions,
+  including dependencies absent from a fresh preparation container.
+- Remove all template marker-like comments before appending one canonical record.
+  Published malformed baselines still fail closed rather than being normalized.
+- Capture the version probe separately and reject a nonzero exit even when stdout
+  equals pkgver. Explicit comparison failure also returns before the help probe.
+- The preparation image explicitly installs diffutils and checks cmp; PR validation
+  now builds and smoke-tests that image as well as the deploy image.
+- Failed/invalid authenticated API responses fall back to the public latest-release
+  redirect, with credentials cleared, timeout bounds, and exact host/project/tag
+  validation. Invalid URLs and failed fallback requests produce no release output.
+- 101 tests pass on the host and isolated deploy-image workspace. Preparation-image
+  build and real cmp checks passed. Temporary mutation probes catch reverting the
+  installed query, template cleanup, and version-probe exit-status guard.
+- An additional fresh-container run (before the build-job split) installed/
+  reconciled dependencies and completed the updater's initial archive download
+  and checksum. The log then printed `==> Making package: pixelterm-c 1.8.6-2`
+  and `==> Retrieving sources...`: makepkg's separate source download ended with
+  curl 56 (TLS unexpected EOF) before compilation. This run did not establish a fresh
+  full PixelTerm build result. The real minimal makepkg probe did reject expected
+  version text with exit 1 (makepkg status 4). No host packages were changed.
+
+## Source-build deployment boundary
+
+- Source code no longer executes in the preparation script/action. Preparation
+  generates metadata and a build decision, then uploads the protected
+  `pixelterm-prepared` artifact containing PKGBUILD and the observed AUR commit.
+- A separate, credential-free build job downloads that artifact and invokes
+  `scripts/build-pixelterm.sh`. The script builds only a temporary PKGBUILD copy,
+  checks installed-version consistency, and deletes build outputs. The job
+  uploads nothing. Its entire VM/container is disposable, including sudo access.
+- Publication waits for successful preparation and a successful required build
+  (or an explicit no-op), starts on a fresh runner, and downloads the original
+  preparation artifact pinned by its numeric artifact ID, not a mutable name.
+  Neither a writable copy nor an attacker-created replacement artifact
+  from the source build can become a deployment input.
+- Test checkout assertions now parse workflow YAML using PyYAML and require the
+  actual boolean false; the required python-yaml tooling is installed in CI test
+  images. The token-bearing fixture forces a changed package and asserts the
+  build shim ran, not merely that the logs contained no token.
+- The hostile-build test overwrites PKGBUILD and creates a forged AUR revision
+  in its disposable build directory; the prepared package/snapshot remain intact.
+  Workflow assertions verify no artifact upload or publishing credentials in the
+  build job and that publication downloads the preparation artifact.
+- 104 tests pass on the host and inside the rebuilt deploy image (including
+  python-yaml). ShellCheck and workflow YAML/embedded Bash checks pass. Mutation
+  probes replacing credential settings with comments and skipping the forced
+  token-bearing build both fail the corresponding tests as intended.
+
+## Publish retries, metadata, and review evidence
+
+- The test harness concatenates preparation/build stdout and stderr, including
+  failure diagnostics. A mutation printing dummy credentials during preparation
+  is caught even when the separate build succeeds.
+- Stale-revision retries return success only for a remote Git tree consisting
+  of regular 0644 PKGBUILD/.SRCINFO files whose bytes match the prepared package
+  and metadata generated from a trusted local copy. Additional assets, file-mode
+  differences, post-processing, checksum rewrites, comparator/metadata failures,
+  or failing release verification still reject the retry. No push is attempted
+  on this already-published path; remote PKGBUILD code is never sourced.
+- Checked-in PixelTerm .SRCINFO matches real makepkg --printsrcinfo output.
+  Tests generate metadata in a writable temporary copy and use an unprivileged
+  user when the suite runs as root in CI. Developer requirements include OpenSSH,
+  Git, Bash, makepkg, Python, and PyYAML.
+- No system Node.js package is needed for JavaScript actions in this job image:
+  actions/runner's NodeScriptActionHandler selects its bundled externals Node
+  binary, and ContainerOperationProvider mounts externals read-only into the job
+  container. Run 43518521683 successfully ran checkout/artifact JavaScript steps
+  in archlinux:base-devel; the log shows the runner's externals mount at /__e.
+  Sources: https://github.com/actions/runner/blob/main/src/Runner.Worker/Handlers/NodeScriptActionHandler.cs
+  and https://github.com/actions/runner/blob/main/src/Runner.Worker/ContainerOperationProvider.cs.
+- 108 tests pass on the host and inside the deploy image. Retry tests use real
+  local Git history and reject different bytes, metadata, extra files, executable
+  modes, failed metadata generation/comparison, and failed release verification.
+
+## Retry semantics, dotted revisions, and Docker environment evidence
+
+- Already-published retry success is disabled for `test: true`; a stale snapshot
+  cannot bypass explicitly requested build tests. After content/release checks,
+  a bounded ls-remote query requires the remote master HEAD to remain equal to
+  the compared clone. Concurrent commits and failed remote queries reject the
+  retry. A writer can still change AUR after the final read; no atomic-read or
+  remote-lock guarantee is claimed.
+- PixelTerm accepts makepkg's integer[.integer] revisions in AUR and the template.
+  Dependency rebuilds increment the final component in decimal and use vercmp
+  to reject non-increasing/overflowed results. No-op revision preservation,
+  manual template precedence, and new-upstream reset-to-1 behavior are retained.
+- README explicitly states that build-aur-action prepares metadata only; source
+  builds and startup checks run separately on a disposable runner.
+- The Docker tag-forwarding allegation is not valid: the workflow step env is
+  included in ContainerActionHandler's Environment and copied into
+  container.ContainerEnvironmentVariables. runs.envs is not a supported action
+  metadata key. Source: https://github.com/actions/runner/blob/main/src/Runner.Worker/Handlers/ContainerActionHandler.cs.
+  A real preparation-image entrypoint test supplied a public tag plus dummy
+  tokens: the real builder login retained the tag, while the updater probe saw
+  neither token. No extra action environment declaration was needed.
+- 114 tests pass on the host and inside the deployment image, including real
+  local-Git concurrent pushes, requested-test retry rejection, dotted revision
+  cases, and entrypoint tag checks. ShellCheck, Bash syntax, and whitespace checks
+  passed. No AUR publication or merge was performed.
+
+## Bounded network requests and artifact path coverage
+
+- Updater curl requests and makepkg HTTP download agents have explicit connect/
+  transfer deadlines and limited retries. No upstream build command is retried.
+- A small retry-pacman.sh limits each dependency transaction to 180 seconds,
+  three attempts, and 5/10-second backoff; cancellation/forced termination is not
+  retried. Bootstrap installs use the same policy before checkout is available.
+  All required build dependencies are reconciled through the bounded helper
+  before makepkg. Pacman lock files are never blindly deleted on failure.
+- Workflow tests assert that the build artifact download path is prepared and
+  matches the parsed directory argument passed to build-pixelterm.sh.
+- 119 tests pass on the host and in the deployment image. Retry tests cover
+  immediate success, transient/persistent errors, timeout limits, and cancellation.
+  A real local HTTP endpoint returning 503 then 200 verified curl recovery; the
+  actual system makepkg HTTP/HTTPS agents retained the configured limits after
+  the temporary config override. Mutation probes changing either the artifact
+  path or build directory argument fail the workflow test. ShellCheck, workflow
+  YAML/Bash syntax, and whitespace checks passed. No AUR publish or merge.
+
+## Entrypoint, source freshness, and metadata repair
+
+- Reject invalid pkgname before privileged setup; runuser invokes bash with an
+  absolute script path as a distinct argv value, without shell interpolation.
+  Initial entrypoint upgrades now use the bounded pacman helper. Tests require
+  sudo to invoke timeout, rather than allowing a deadline-free retry to pass.
+- HTTPS clone/tag queries use bounded retry-git.sh. Partial clone directories and
+  failed-command stdout never become trusted results; retries use clean temporary
+  directories, limited attempts, and backoff. Actual source builds remain separate.
+- Preparation carries github.sha in the pinned artifact. Deployment validates it
+  against checkout/current main before importing credentials, then observes main
+  again before final push or no-op success. Even a Task-only main commit requires
+  rerunning preparation. A final read-to-push race cannot be eliminated atomically.
+- If vercmp returns equality but upstream version text changes, pkgrel increases.
+  The review example 1.8.6.0 is actually newer on pacman; a real equivalent spelling
+  such as 01.8.6 exercises the regression instead.
+- Preparation compares generated .SRCINFO as well as identical PKGBUILD. A sole
+  regular-file metadata change is allowed at equal version only if regeneration
+  from staged PKGBUILD produces exactly the staged bytes; package/asset changes
+  and invalid metadata still require a higher version.
+- 127 host/container tests pass. Local-Git tests verify main advancing blocks old
+  prepared SHA; metadata tests verify real staging/commits; actual container
+  entrypoint probes accept a valid tag without tokens and reject shell-injection
+  package names before setup. ShellCheck passes updated helper scripts; the
+  entrypoint retains only its pre-existing unused pkgdir warning.
+
+## Git retry contract follow-up
+
+- Transient Git failure tests require exactly 5/10-second backoff; termination
+  statuses 130/137/143 require one invocation, no sleep, and no partial result.
+- The internal clone wrapper explicitly requires repository plus destination,
+  supports only the caller's leading --quiet/--depth=N options, and rejects
+  missing/ambiguous arguments before invoking Git. It does not promise the full
+  git clone CLI or silently reinterpret repository-only clone syntax.
+- README distinguishes Git's 60-second attempt limit from updater curl's
+  180-second transfer policy and the workflow redirect's 60-second total limit.
+- 130 host/container tests passed; retry-git ShellCheck and whitespace checks
+  passed. No merge or AUR publication was performed.

@@ -1,4 +1,5 @@
 import os
+import hashlib
 from pathlib import Path
 import re
 import shutil
@@ -9,6 +10,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / 'scripts/pixelterm-c.sh'
+DEPENDENCIES = 'libmupdf=1.28.6-1 ffmpeg=2:9.0.2-3'
 
 
 class PixelTermUpdateTests(unittest.TestCase):
@@ -19,7 +21,12 @@ class PixelTermUpdateTests(unittest.TestCase):
 
     def run_update(self, current_rel, *, current_version='1.8.2',
                    template_version='1.8.2', template_rel='1', template_indent='',
-                   latest_version='1.8.2', expect_success=True):
+                   latest_version='1.8.2', expect_success=True,
+                   published_deps=DEPENDENCIES, dependencies=DEPENDENCIES,
+                   query_status='0', build_status='0', identical=False, token='',
+                   release_tag='', published_marker=None, cmp_status=None,
+                   template_marker='', reconcile_status='0', after_build_deps=None,
+                   after_build_query_status='0', run_source_build=True, published_metadata_extra=''):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             bin_dir = root / 'bin'
@@ -28,24 +35,44 @@ class PixelTermUpdateTests(unittest.TestCase):
             bin_dir.mkdir()
             package_dir.mkdir()
             scripts_dir.mkdir()
-            source_archive = root / 'source.tar.gz'
+            checksum = hashlib.sha256(b'test source archive\n').hexdigest()
             (package_dir / 'PKGBUILD').write_text(
                 f'pkgver={template_version}\n{template_indent}pkgrel={template_rel}\n'
-                "sha256sums=('old')\n"
+                f"sha256sums=('{checksum if identical else 'old'}')\n"
+                + template_marker
             )
-            script = SCRIPT.read_text().replace('/tmp/pixelterm-c.tar.gz', str(source_archive))
-            (scripts_dir / SCRIPT.name).write_text(script)
+            (scripts_dir / SCRIPT.name).write_text(SCRIPT.read_text())
+            build_script = scripts_dir / 'build-pixelterm.sh'
+            build_script.write_text((ROOT / 'scripts/build-pixelterm.sh').read_text())
+            (scripts_dir / 'retry-pacman.sh').write_text((ROOT / 'scripts/retry-pacman.sh').read_text())
+            (scripts_dir / 'retry-git.sh').write_text((ROOT / 'scripts/retry-git.sh').read_text())
 
             commands = {
                 'git': '''#!/bin/bash
 set -eu
+if [[ $1 == -C ]]; then printf '%040d\\n' 1; exit; fi
 [[ $1 == clone ]]
 destination=${@: -1}
 mkdir -p "$destination"
 printf 'pkgver = %s\\npkgrel = %s\\n' "$CURRENT_VERSION" "$CURRENT_RELEASE" > "$destination/.SRCINFO"
+printf '%s' "$PUBLISHED_METADATA_EXTRA" >> "$destination/.SRCINFO"
+printf "pkgver=%s\\npkgrel=%s\\nsha256sums=('%s')\\n" "$CURRENT_VERSION" "$CURRENT_RELEASE" "$SOURCE_CHECKSUM" > "$destination/PKGBUILD"
+if [[ -n $PUBLISHED_MARKER ]]; then
+  printf '%s\\n' "$PUBLISHED_MARKER" >> "$destination/PKGBUILD"
+elif [[ -n $PUBLISHED_DEPS ]]; then
+  printf '# rebuild-deps: %s\\n' "$PUBLISHED_DEPS" >> "$destination/PKGBUILD"
+fi
 ''',
                 'curl': '''#!/bin/bash
 set -eu
+[[ " $* " == *" --connect-timeout 10 "* ]]
+[[ " $* " == *" --max-time 180 "* ]]
+[[ " $* " == *" --retry 2 "* ]]
+[[ " $* " == *" --retry-delay 5 "* ]]
+[[ " $* " == *" --retry-max-time 240 "* ]]
+if [[ " $* " == *"/releases/latest"* ]]; then
+  printf '%s\\n' "$@" > api-request
+fi
 if [[ " $* " == *"/archive/refs/tags/"* ]]; then
   output=
   while (($#)); do
@@ -74,10 +101,37 @@ echo 0
 ''',
                 'makepkg': '''#!/bin/bash
 set -eu
+test -z "${GH_TOKEN:-}${GITHUB_TOKEN:-}"
+if [[ $1 != --printsrcinfo ]]; then
+  echo build-stdout
+  echo build-stderr >&2
+  printf '%s\\n' "$*" >> "$TEST_PACKAGE_DIR/build-calls"
+  touch "$TEST_PACKAGE_DIR/built"
+  exit "$BUILD_STATUS"
+fi
+echo prepare-metadata-stderr >&2
 pkgver=$(/usr/bin/sed -n 's/^[[:space:]]*pkgver=//p' PKGBUILD)
 pkgrel=$(/usr/bin/sed -n 's/^[[:space:]]*pkgrel=//p' PKGBUILD)
 printf 'pkgver = %s\\npkgrel = %s\\n' "$pkgver" "$pkgrel"
 ''',
+                'pacman': '''#!/bin/bash
+set -eu
+if [[ "$*" == '-Su --needed --noconfirm libmupdf ffmpeg' ||
+      "$*" == '-Su --needed --noconfirm libmupdf ffmpeg chafa glib2 gdk-pixbuf2 pkgconf' ]]; then
+  touch "$TEST_PACKAGE_DIR/reconciled"
+  exit "$RECONCILE_STATUS"
+fi
+if [[ $1 == -Sp ]]; then echo libmupdf=99; echo ffmpeg=99; exit; fi
+[[ "$*" == '-Q libmupdf ffmpeg' ]]
+test -e "$TEST_PACKAGE_DIR/reconciled"
+values=$DEPENDENCIES
+if [[ -e $TEST_PACKAGE_DIR/built ]]; then values=$AFTER_BUILD_DEPS; fi
+printf '%s\\n' "$values" | tr ' ' '\\n' | tr '=' ' '
+if [[ -e $TEST_PACKAGE_DIR/built ]]; then exit "$AFTER_BUILD_QUERY_STATUS"; fi
+exit "$QUERY_STATUS"
+''',
+                'sudo': '#!/bin/sh\nexec "$@"\n',
+                'sleep': '#!/bin/sh\nexit 0\n',
                 'sed': '''#!/bin/bash
 set -eu
 if [[ ${1:-} == -i ]]; then
@@ -90,6 +144,8 @@ fi
 exec /usr/bin/sed "$@"
 ''',
             }
+            if cmp_status is not None:
+                commands['cmp'] = f'#!/bin/sh\nexit {cmp_status}\n'
             for name, content in commands.items():
                 executable = bin_dir / name
                 executable.write_text(content)
@@ -101,6 +157,20 @@ exec /usr/bin/sed "$@"
                 'CURRENT_VERSION': current_version,
                 'CURRENT_RELEASE': str(current_rel),
                 'LATEST_VERSION': latest_version,
+                'PUBLISHED_DEPS': published_deps,
+                'DEPENDENCIES': dependencies,
+                'QUERY_STATUS': query_status,
+                'BUILD_STATUS': build_status,
+                'SOURCE_CHECKSUM': checksum,
+                'GH_TOKEN': token,
+                'GITHUB_TOKEN': token,
+                'PIXELTERM_RELEASE_TAG': release_tag,
+                'PUBLISHED_MARKER': published_marker or '',
+                'RECONCILE_STATUS': reconcile_status,
+                'AFTER_BUILD_DEPS': dependencies if after_build_deps is None else after_build_deps,
+                'AFTER_BUILD_QUERY_STATUS': after_build_query_status,
+                'TEST_PACKAGE_DIR': str(package_dir),
+                'PUBLISHED_METADATA_EXTRA': published_metadata_extra,
             }
             result = subprocess.run(
                 ['bash', str(scripts_dir / SCRIPT.name)],
@@ -109,6 +179,14 @@ exec /usr/bin/sed "$@"
                 text=True,
                 capture_output=True,
             )
+            # Mirror the workflow: source builds consume a separate job's copy.
+            if run_source_build and result.returncode == 0 and (package_dir / 'build-required').read_text().strip() == 'true':
+                preparation = result
+                build = subprocess.run(['bash', str(build_script), str(package_dir)],
+                                       cwd=package_dir, env=environment, text=True, capture_output=True)
+                result = subprocess.CompletedProcess(build.args, build.returncode,
+                                                     preparation.stdout + build.stdout,
+                                                     preparation.stderr + build.stderr)
             if expect_success:
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             else:
@@ -116,12 +194,173 @@ exec /usr/bin/sed "$@"
                 return result, None, None
             package = (package_dir / 'PKGBUILD').read_text()
             metadata = (package_dir / '.SRCINFO').read_text()
+            self.last_builds = ((package_dir / 'build-calls').read_text()
+                                if (package_dir / 'build-calls').exists() else '')
+            self.last_revision = ((package_dir / '.aur-revision').read_text()
+                                  if (package_dir / '.aur-revision').exists() else '')
+            self.last_api_request = ((package_dir / 'api-request').read_text()
+                                     if (package_dir / 'api-request').exists() else '')
+            self.last_output = result.stdout + result.stderr
+            self.last_build_required = (package_dir / 'build-required').read_text().strip()
             return package, metadata
+
+    def test_inherited_tokens_do_not_reach_makepkg(self):
+        self.run_update('8', token='test-workflow-token', published_deps='')
+        self.assertIn('--check', self.last_builds.split())
+        self.assertEqual(len(self.last_builds.splitlines()), 1)
+        self.assertNotIn('Authorization:', self.last_api_request)
+        self.assertNotIn('test-workflow-token', self.last_output)
+
+    def test_build_path_retains_preparation_stdout_and_stderr(self):
+        self.run_update('8', published_deps='')
+        self.assertIn('Reconciling ', self.last_output)
+        self.assertIn('prepare-metadata-stderr', self.last_output)
+        self.assertIn('build-stdout', self.last_output)
+        self.assertIn('build-stderr', self.last_output)
+
+    def test_preparation_only_emits_build_decision_without_source_execution(self):
+        self.run_update('8', published_deps='', run_source_build=False)
+        self.assertEqual(self.last_build_required, 'true')
+        self.assertEqual(self.last_builds, '')
+        self.assertEqual(self.last_revision, '0' * 39 + '1\n')
+
+    def test_pre_resolved_release_tag_skips_api_request(self):
+        package, _ = self.run_update('8', release_tag='v1.9.0')
+        self.assertEqual(self.field(package, 'pkgver'), '1.9.0')
+        self.assertEqual(self.last_api_request, '')
+
+    def test_invalid_pre_resolved_release_is_rejected(self):
+        self.run_update('8', release_tag='$(id)', expect_success=False)
+
+    def test_local_update_without_token_omits_authentication(self):
+        self.run_update('8')
+        self.assertNotIn('Authorization:', self.last_api_request)
+
+    def test_each_dependency_change_increments_release(self):
+        for previous in ('libmupdf=1.28.5-1 ffmpeg=2:9.0.2-3',
+                         'libmupdf=1.28.6-1 ffmpeg=2:9.0.1-1'):
+            with self.subTest(previous=previous):
+                package, _ = self.run_update('8', published_deps=previous)
+                self.assertEqual(self.field(package, 'pkgrel'), '9')
+                self.assertIn('# rebuild-deps: ' + DEPENDENCIES, package)
+                self.assertIn('--syncdeps', self.last_builds.split())
+                self.assertIn('--cleanbuild', self.last_builds.split())
+                self.assertIn('--check', self.last_builds.split())
+                self.assertEqual(self.last_revision, '0' * 39 + '1\n')
+
+    def test_legacy_package_gets_one_baseline_rebuild(self):
+        package, _ = self.run_update('8', published_deps='')
+        self.assertEqual(self.field(package, 'pkgrel'), '9')
+
+    def test_dependency_change_preserves_higher_explicit_revision(self):
+        package, _ = self.run_update('8', published_deps='', template_rel='12')
+        self.assertEqual(self.field(package, 'pkgrel'), '12')
+
+    def test_new_release_and_dependency_change_start_at_one(self):
+        package, _ = self.run_update('8', published_deps='', latest_version='1.9.0')
+        self.assertEqual(self.field(package, 'pkgrel'), '1')
+
+    def test_identical_published_package_skips_build(self):
+        package, _ = self.run_update('8', identical=True)
+        self.assertEqual(self.field(package, 'pkgrel'), '8')
+        self.assertEqual(self.last_builds, '')
+
+    def test_metadata_only_difference_is_identified_without_rebuilding(self):
+        self.run_update('8', identical=True, published_metadata_extra='stale description\n')
+        self.assertEqual(self.last_build_required, 'false')
+        self.assertEqual(self.last_builds, '')
+        self.assertIn('Repairing generated AUR metadata', self.last_output)
+
+    def test_comparison_errors_stop_instead_of_rebuilding(self):
+        for status in (2, 127):
+            with self.subTest(status=status):
+                result, _, _ = self.run_update('8', cmp_status=status, expect_success=False)
+                self.assertIn('Failed to compare PKGBUILD', result.stderr)
+
+    def test_dependency_queries_fail_closed(self):
+        for values in ({'query_status': '1'}, {'dependencies': ''},
+                       {'dependencies': 'libmupdf=bad;command ffmpeg=1'},
+                       {'dependencies': 'libmupdf=1'},
+                       {'dependencies': DEPENDENCIES + ' extra=1'}):
+            with self.subTest(values=values):
+                result, _, _ = self.run_update('8', expect_success=False, **values)
+                self.assertIn('dependency', result.stderr)
+
+    def test_malformed_published_record_fails_closed(self):
+        for record in ('garbage', ' ',
+                       DEPENDENCIES + '\n# rebuild-deps: ' + DEPENDENCIES,
+                       DEPENDENCIES + '\n# rebuild-deps:'):
+            result, _, _ = self.run_update('8', published_deps=record, expect_success=False)
+            self.assertIn('dependency', result.stderr)
+
+    def test_failed_build_blocks_publication(self):
+        self.run_update('8', published_deps='', build_status='1', expect_success=False)
+
+    def test_marker_uses_installed_versions_not_newer_sync_versions(self):
+        package, _ = self.run_update('8', published_deps='')
+        self.assertIn('# rebuild-deps: ' + DEPENDENCIES, package)
+        self.assertNotIn('=99', package)
+
+    def test_dependency_reconciliation_failure_stops_update(self):
+        self.run_update('8', reconcile_status='1', expect_success=False)
+
+    def test_dependency_change_during_build_stops_update(self):
+        result, _, _ = self.run_update('8', published_deps='', after_build_deps='libmupdf=99 ffmpeg=99',
+                                       expect_success=False)
+        self.assertIn('changed during build', result.stderr)
+
+    def test_post_build_query_failure_rejects_even_matching_output(self):
+        self.run_update('8', published_deps='', after_build_query_status='1', expect_success=False)
+
+    def test_template_markers_are_replaced_with_one_canonical_record(self):
+        for marker in ('  # rebuild-deps: bad\n', '## rebuild-deps = bad\n',
+                       '# rebuild-deps: bad\n\t#rebuild-deps bad\n'):
+            with self.subTest(marker=marker):
+                package, _ = self.run_update('8', template_marker=marker)
+                records = [line for line in package.splitlines() if 'rebuild-deps' in line]
+                self.assertEqual(records, ['# rebuild-deps: ' + DEPENDENCIES])
+
+    def test_noncanonical_markers_fail_closed(self):
+        for marker in ('  # rebuild-deps: ' + DEPENDENCIES,
+                       '\t# rebuild-deps: ' + DEPENDENCIES,
+                       '#rebuild-deps: ' + DEPENDENCIES,
+                       '## rebuild-deps: ' + DEPENDENCIES,
+                       '# rebuild-deps = ' + DEPENDENCIES,
+                       '# rebuild-deps ' + DEPENDENCIES,
+                       '# rebuild-deps: ' + DEPENDENCIES + ' ',
+                       '# rebuild-deps: ' + DEPENDENCIES + '\n  # rebuild-deps: bad'):
+            with self.subTest(marker=marker):
+                result, _, _ = self.run_update('8', published_marker=marker, expect_success=False)
+                self.assertIn('dependency', result.stderr)
 
     def test_regular_same_version_update_preserves_pkgrel(self):
         package, metadata = self.run_update('8')
         self.assertEqual(self.field(package, 'pkgrel'), '8')
         self.assertEqual(self.field(metadata, 'pkgrel'), '8')
+
+    def test_dotted_revisions_increment_last_component(self):
+        for previous, expected in (('1.1', '1.2'), ('1.9', '1.10'), ('2.009', '2.10')):
+            with self.subTest(previous=previous):
+                package, _ = self.run_update(previous, published_deps='')
+                self.assertEqual(self.field(package, 'pkgrel'), expected)
+
+    def test_dotted_revisions_preserve_noop_manual_priority_and_release_reset(self):
+        package, _ = self.run_update('1.9', template_rel='1.1')
+        self.assertEqual(self.field(package, 'pkgrel'), '1.9')
+        package, _ = self.run_update('1.9', template_rel='2.1', published_deps='')
+        self.assertEqual(self.field(package, 'pkgrel'), '2.1')
+        package, _ = self.run_update('1.9', template_rel='2.1', latest_version='1.9.0')
+        self.assertEqual(self.field(package, 'pkgrel'), '1')
+
+    def test_malformed_dotted_revisions_are_rejected(self):
+        for value in ('1..1', '1.', '.1', '1.1;id', '1.2.9'):
+            with self.subTest(value=value):
+                self.run_update(value, expect_success=False)
+
+    def test_equivalent_version_text_change_bumps_revision(self):
+        package, _ = self.run_update('8', latest_version='01.8.2')
+        self.assertEqual(self.field(package, 'pkgver'), '01.8.2')
+        self.assertEqual(self.field(package, 'pkgrel'), '9')
 
     def test_same_version_update_publishes_explicit_higher_template_pkgrel(self):
         package, metadata = self.run_update('2', template_rel='8')

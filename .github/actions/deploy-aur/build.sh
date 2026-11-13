@@ -3,6 +3,23 @@
 
 set -o errexit -o pipefail -o nounset
 
+verify_source_revision() {
+  local remote_source
+  remote_source=$(timeout --signal=TERM 30s git ls-remote --exit-code "$source_repository" refs/heads/main | awk '{print $1}')
+  if [[ "$remote_source" != "$expected_source_revision" ]]; then
+    echo 'Source main changed since preparation; rerun from current main.' >&2
+    return 1
+  fi
+}
+expected_source_revision_file=${INPUT_EXPECTED_SOURCE_REVISION_FILE:-}
+if [[ -n "$expected_source_revision_file" ]]; then
+  expected_source_revision=$(cat "$expected_source_revision_file")
+  [[ "$expected_source_revision" =~ ^[0-9a-f]{40}$ ]] || { echo 'Invalid prepared source SHA' >&2; exit 1; }
+  source_repository=$(git -c safe.directory="$PWD" remote get-url origin)
+  [[ "$(git -c safe.directory="$PWD" rev-parse HEAD)" == "$expected_source_revision" ]] || { echo 'Checkout differs from prepared source' >&2; exit 1; }
+  verify_source_revision
+fi
+
 pkgname=$INPUT_PKGNAME
 pkgbuild=$INPUT_PKGBUILD
 assets=$INPUT_ASSETS
@@ -114,6 +131,37 @@ if [[ -n "$expected_revision_file" ]]; then
   expected_revision=$(cat "$expected_revision_file")
   actual_revision=$(git -C /tmp/local-repo rev-parse --verify HEAD 2>/dev/null) || actual_revision=absent
   if [[ "$expected_revision" != "$actual_revision" ]]; then
+    # A lost push response may leave the exact prepared package already live.
+    # Assets/post-processing need their own complete-tree proof; never guess.
+    if [[ "$actual_revision" != absent && -n "${pkgbuild:-}" &&
+          -z "${assets:-}" && -z "${post_process:-}" &&
+          "${updpkgsums:-false}" == false && "$test" == false && "$force_push" == false ]] &&
+       [[ "$(git -C /tmp/local-repo ls-tree -r --name-only HEAD)" == $'.SRCINFO\nPKGBUILD' ]] &&
+       [[ "$(git -C /tmp/local-repo ls-tree -r --format='%(objectmode)' HEAD)" == $'100644\n100644' ]]; then
+      retry_dir=$(mktemp -d)
+      if cp "$pkgbuild" "$retry_dir/PKGBUILD" &&
+         (cd "$retry_dir" && makepkg --printsrcinfo) > "$retry_dir/.SRCINFO" &&
+         cmp -s "$pkgbuild" /tmp/local-repo/PKGBUILD &&
+         cmp -s "$retry_dir/.SRCINFO" /tmp/local-repo/.SRCINFO; then
+        rm -f "$retry_dir/.SRCINFO" "$retry_dir/PKGBUILD"
+        rmdir "$retry_dir"
+        if [[ -n "${release_verifier:-}" ]]; then
+          python3 "$release_verifier" --verify --package "$pkgbuild"
+        fi
+        if ! remote_revision=$(timeout --signal=TERM 30s git -C /tmp/local-repo \
+          ls-remote --exit-code origin refs/heads/master | awk '{print $1}') ||
+           [[ "$remote_revision" != "$actual_revision" ]]; then
+          echo 'AUR changed or could not be revalidated after retry checks; rerun.' >&2
+          exit 1
+        fi
+        if [[ -n "${expected_source_revision_file:-}" ]]; then verify_source_revision; fi
+        echo 'Prepared package already published; retry is a no-op.'
+        echo '::endgroup::'
+        exit 0
+      fi
+      rm -f "$retry_dir/.SRCINFO" "$retry_dir/PKGBUILD"
+      rmdir "$retry_dir"
+    fi
     echo 'AUR changed after preparation; aborting without overwriting it.' >&2
     exit 1
   fi
@@ -148,10 +196,16 @@ echo '::group::Copying files into /tmp/local-repo'
       exit 1
     fi
     if (( $(vercmp "$existing_base" "$incoming_base") == 0 )) &&
-       (( $(vercmp "$incoming_rel" "$existing_rel") <= 0 )) &&
-       ! cmp -s /tmp/generated-PKGBUILD /tmp/local-repo/PKGBUILD; then
-      echo 'Changed package requires a strictly higher pkgrel; refusing overwrite.' >&2
-      exit 1
+       (( $(vercmp "$incoming_rel" "$existing_rel") <= 0 )); then
+      comparison_status=0
+      cmp -s /tmp/generated-PKGBUILD /tmp/local-repo/PKGBUILD || comparison_status=$?
+      case "$comparison_status" in
+        0) ;;
+        1)
+          echo 'Changed package requires a strictly higher pkgrel; refusing overwrite.' >&2
+          exit 1 ;;
+        *) echo 'Failed to compare PKGBUILD; check diffutils and file access.' >&2; exit 1 ;;
+      esac
     fi
   fi
   cp /tmp/generated-PKGBUILD /tmp/local-repo/PKGBUILD
@@ -198,20 +252,35 @@ fi
 
 # Check the entire staged tree, including added/deleted assets and late changes.
 if git rev-parse --verify HEAD >/dev/null 2>&1 && ! git diff --cached --quiet HEAD; then
-  versions=()
-  for revision in HEAD ''; do
-    metadata=$(git show "${revision}:.SRCINFO")
-    version=$(printf '%s\n' "$metadata" | sed -n 's/^[[:space:]]*pkgver = //p')
-    release=$(printf '%s\n' "$metadata" | sed -n 's/^[[:space:]]*pkgrel = //p')
-    epoch=$(printf '%s\n' "$metadata" | sed -n 's/^[[:space:]]*epoch = //p')
-    [[ "$version" =~ ^[a-zA-Z0-9._+]+$ ]] || { echo 'Invalid final pkgver.' >&2; exit 1; }
-    [[ "$release" =~ ^[0-9]+([.][0-9]+)*$ ]] || { echo 'Invalid final pkgrel.' >&2; exit 1; }
-    [[ "${epoch:-0}" =~ ^[0-9]+$ ]] || { echo 'Invalid final epoch.' >&2; exit 1; }
-    versions+=("${epoch:-0}:${version}-${release}")
-  done
-  if (( $(vercmp "${versions[1]}" "${versions[0]}") <= 0 )); then
-    echo 'Final staged changes require a strictly higher package version or pkgrel.' >&2
-    exit 1
+  metadata_repair=false
+  if [[ "$(git diff --cached --name-only HEAD)" == .SRCINFO &&
+        "$(git ls-files --stage .SRCINFO | awk '{print $1}')" == 100644 ]]; then
+    repair_dir=$(mktemp -d)
+    git show :PKGBUILD > "$repair_dir/PKGBUILD"
+    git show :.SRCINFO > "$repair_dir/staged"
+    if (cd "$repair_dir" && makepkg --printsrcinfo) > "$repair_dir/generated" &&
+       cmp -s "$repair_dir/generated" "$repair_dir/staged"; then
+      metadata_repair=true
+    fi
+    rm -f "$repair_dir/PKGBUILD" "$repair_dir/staged" "$repair_dir/generated"
+    rmdir "$repair_dir"
+  fi
+  if [[ "$metadata_repair" == false ]]; then
+    versions=()
+    for revision in HEAD ''; do
+      metadata=$(git show "${revision}:.SRCINFO")
+      version=$(printf '%s\n' "$metadata" | sed -n 's/^[[:space:]]*pkgver = //p')
+      release=$(printf '%s\n' "$metadata" | sed -n 's/^[[:space:]]*pkgrel = //p')
+      epoch=$(printf '%s\n' "$metadata" | sed -n 's/^[[:space:]]*epoch = //p')
+      [[ "$version" =~ ^[a-zA-Z0-9._+]+$ ]] || { echo 'Invalid final pkgver.' >&2; exit 1; }
+      [[ "$release" =~ ^[0-9]+([.][0-9]+)*$ ]] || { echo 'Invalid final pkgrel.' >&2; exit 1; }
+      [[ "${epoch:-0}" =~ ^[0-9]+$ ]] || { echo 'Invalid final epoch.' >&2; exit 1; }
+      versions+=("${epoch:-0}:${version}-${release}")
+    done
+    if (( $(vercmp "${versions[1]}" "${versions[0]}") <= 0 )); then
+      echo 'Final staged changes require a strictly higher package version or pkgrel.' >&2
+      exit 1
+    fi
   fi
 fi
 
@@ -238,6 +307,7 @@ if [[ -n "$release_verifier" ]]; then
   git show HEAD:PKGBUILD > /tmp/committed-PKGBUILD
   python3 "$release_verifier" --verify --package /tmp/committed-PKGBUILD
 fi
+if [[ -n "${expected_source_revision_file:-}" ]]; then verify_source_revision; fi
 case "$force_push" in
 true)
   git push -v --force aur master

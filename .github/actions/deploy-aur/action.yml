@@ -5,6 +5,10 @@ branding:
   color: blue
   icon: package
 inputs:
+  expected_source_revision_file:
+    description: 'Optional prepared source SHA; main must still match before publication'
+    required: false
+    default: ''
   release_verifier:
     description: 'Optional trusted Python verifier, run against committed PKGBUILD immediately before push'
     required: false

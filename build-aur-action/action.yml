@@ -1,5 +1,5 @@
 name: 'Build AUR Package'
-description: 'Prepare and build an AUR package from its PKGBUILD.'
+description: 'Prepare trusted AUR metadata without executing upstream source builds.'
 branding:
   icon: user-check
   color: gray-dark
