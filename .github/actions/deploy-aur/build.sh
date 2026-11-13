@@ -114,6 +114,30 @@ if [[ -n "$expected_revision_file" ]]; then
   expected_revision=$(cat "$expected_revision_file")
   actual_revision=$(git -C /tmp/local-repo rev-parse --verify HEAD 2>/dev/null) || actual_revision=absent
   if [[ "$expected_revision" != "$actual_revision" ]]; then
+    # A lost push response may leave the exact prepared package already live.
+    # Assets/post-processing need their own complete-tree proof; never guess.
+    if [[ "$actual_revision" != absent && -n "${pkgbuild:-}" &&
+          -z "${assets:-}" && -z "${post_process:-}" &&
+          "${updpkgsums:-false}" == false && "$force_push" == false ]] &&
+       [[ "$(git -C /tmp/local-repo ls-tree -r --name-only HEAD)" == $'.SRCINFO\nPKGBUILD' ]] &&
+       [[ "$(git -C /tmp/local-repo ls-tree -r --format='%(objectmode)' HEAD)" == $'100644\n100644' ]]; then
+      retry_dir=$(mktemp -d)
+      if cp "$pkgbuild" "$retry_dir/PKGBUILD" &&
+         (cd "$retry_dir" && makepkg --printsrcinfo) > "$retry_dir/.SRCINFO" &&
+         cmp -s "$pkgbuild" /tmp/local-repo/PKGBUILD &&
+         cmp -s "$retry_dir/.SRCINFO" /tmp/local-repo/.SRCINFO; then
+        rm -f "$retry_dir/.SRCINFO" "$retry_dir/PKGBUILD"
+        rmdir "$retry_dir"
+        if [[ -n "${release_verifier:-}" ]]; then
+          python3 "$release_verifier" --verify --package "$pkgbuild"
+        fi
+        echo 'Prepared package already published; retry is a no-op.'
+        echo '::endgroup::'
+        exit 0
+      fi
+      rm -f "$retry_dir/.SRCINFO" "$retry_dir/PKGBUILD"
+      rmdir "$retry_dir"
+    fi
     echo 'AUR changed after preparation; aborting without overwriting it.' >&2
     exit 1
   fi

@@ -117,3 +117,29 @@ commands referenced by the generic CI/PR skills.
   python-yaml). ShellCheck and workflow YAML/embedded Bash checks pass. Mutation
   probes replacing credential settings with comments and skipping the forced
   token-bearing build both fail the corresponding tests as intended.
+
+## Publish retries, metadata, and review evidence
+
+- The test harness concatenates preparation/build stdout and stderr, including
+  failure diagnostics. A mutation printing dummy credentials during preparation
+  is caught even when the separate build succeeds.
+- Stale-revision retries return success only for a remote Git tree consisting
+  of regular 0644 PKGBUILD/.SRCINFO files whose bytes match the prepared package
+  and metadata generated from a trusted local copy. Additional assets, file-mode
+  differences, post-processing, checksum rewrites, comparator/metadata failures,
+  or failing release verification still reject the retry. No push is attempted
+  on this already-published path; remote PKGBUILD code is never sourced.
+- Checked-in PixelTerm .SRCINFO matches real makepkg --printsrcinfo output.
+  Tests generate metadata in a writable temporary copy and use an unprivileged
+  user when the suite runs as root in CI. Developer requirements include OpenSSH,
+  Git, Bash, makepkg, Python, and PyYAML.
+- No system Node.js package is needed for JavaScript actions in this job image:
+  actions/runner's NodeScriptActionHandler selects its bundled externals Node
+  binary, and ContainerOperationProvider mounts externals read-only into the job
+  container. Run 43518521683 successfully ran checkout/artifact JavaScript steps
+  in archlinux:base-devel; the log shows the runner's externals mount at /__e.
+  Sources: https://github.com/actions/runner/blob/main/src/Runner.Worker/Handlers/NodeScriptActionHandler.cs
+  and https://github.com/actions/runner/blob/main/src/Runner.Worker/ContainerOperationProvider.cs.
+- 108 tests pass on the host and inside the deploy image. Retry tests use real
+  local Git history and reject different bytes, metadata, extra files, executable
+  modes, failed metadata generation/comparison, and failed release verification.

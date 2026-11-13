@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -51,7 +52,10 @@ def workflow_concurrency(text):
 
 
 class CloneTests(unittest.TestCase):
-    def run_clone(self, *, empty=True, fail=False, force=False, expected=None, api_count='1'):
+    def run_clone(self, *, empty=True, fail=False, force=False, expected=None, api_count='1',
+                  published=None, metadata='metadata\n', extra_file=False, assets='',
+                  post_process='', updpkgsums='false', verifier_status=None,
+                  metadata_status='0', compare_status=None, executable=False):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             remote = root / 'remote.git'
@@ -61,6 +65,14 @@ class CloneTests(unittest.TestCase):
             if not empty:
                 seed = root / 'seed'
                 subprocess.run([real_git, 'clone', str(remote), str(seed)], check=True, capture_output=True)
+                if published is not None:
+                    (seed / 'PKGBUILD').write_text(published)
+                    (seed / '.SRCINFO').write_text(metadata)
+                    if executable:
+                        (seed / 'PKGBUILD').chmod(0o755)
+                    if extra_file:
+                        (seed / 'extra').write_text('unexpected')
+                    subprocess.run([real_git, '-C', str(seed), 'add', '.'], check=True, capture_output=True)
                 subprocess.run([real_git, '-C', str(seed), '-c', 'user.name=Test',
                                 '-c', 'user.email=test@example.org', 'commit', '--allow-empty',
                                 '-m', 'existing history'], check=True, capture_output=True)
@@ -100,6 +112,17 @@ else
 fi
 ''')
             jq_shim.chmod(0o755)
+            incoming = root / 'incoming'
+            incoming.write_text('pkgver=1.8.6\npkgrel=2\n')
+            makepkg = root / 'makepkg'
+            makepkg.write_text('#!/bin/sh\n[ "$*" = --printsrcinfo ] || exit 99\n[ "$(cat PKGBUILD)" = "$(cat "$INCOMING")" ] || exit 99\nprintf "metadata\\n"\nexit "$METADATA_STATUS"\n')
+            makepkg.chmod(0o755)
+            if compare_status is not None:
+                comparator = root / 'cmp'
+                comparator.write_text(f'#!/bin/sh\nexit {compare_status}\n')
+                comparator.chmod(0o755)
+            verifier = root / 'verify.py'
+            verifier.write_text('import sys\nraise SystemExit(' + str(verifier_status or 0) + ')\n')
             block = SCRIPT.read_text().split("echo '::group::Cloning AUR package into /tmp/local-repo'", 1)[1]
             block = block.split("echo '::group::Copying files into /tmp/local-repo'", 1)[0]
             target = root / 'checkout'
@@ -109,10 +132,17 @@ fi
             env = {**os.environ, 'PATH': str(root) + os.pathsep + os.environ['PATH'],
                    'REAL_GIT': real_git, 'TEST_REMOTE': str(remote),
                    'SIMULATE_FAILURE': str(fail).lower(), 'AUR_COUNT': api_count,
+                   'INCOMING': str(incoming),
+                   'METADATA_STATUS': metadata_status,
                    'SIMULATE_API_FAILURE': str(api_count == 'api-failure').lower(),
                    'AUR_COUNT_JSON': ('{"type":"error","resultcount":0}' if api_count == 'rpc-error'
                                      else '{"type":"multiinfo","resultcount": ' + api_count + '}')}
             setup = '\n'.join(['set -euo pipefail', 'pkgname=test-package',
+                               'pkgbuild=$INCOMING',
+                               f'assets={shlex.quote(assets)}',
+                               f'post_process={shlex.quote(post_process)}',
+                               f'updpkgsums={updpkgsums}',
+                               f'release_verifier={verifier if verifier_status is not None else ""}',
                                f"expected_revision_file='{revision_file if expected else ''}'",
                                f'force_push={str(force).lower()}', block])
             result = subprocess.run(['bash', '-c', setup], env=env, text=True, capture_output=True)
@@ -120,6 +150,24 @@ fi
             branch = subprocess.run([real_git, '-C', str(target), 'symbolic-ref', '--short', 'HEAD'],
                                     text=True, capture_output=True).stdout.strip() if exists else None
             return result, exists, branch
+
+    def test_successful_publish_retry_accepts_only_exact_remote_package(self):
+        result, _, _ = self.run_clone(empty=False, expected='old-commit',
+                                      published='pkgver=1.8.6\npkgrel=2\n')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('already published', result.stdout)
+
+    def test_retry_rejects_changed_package_metadata_or_extra_files(self):
+        for values in ({'published': 'pkgver=1.8.6\npkgrel=3\n'},
+                       {'metadata': 'different\n'}, {'extra_file': True},
+                       {'assets': 'LICENSE'}, {'post_process': 'true'},
+                       {'updpkgsums': 'true'}, {'verifier_status': 1},
+                       {'metadata_status': '1'}, {'compare_status': 2},
+                       {'executable': True}):
+            with self.subTest(values=values):
+                settings = {'published': 'pkgver=1.8.6\npkgrel=2\n', **values}
+                result, _, _ = self.run_clone(empty=False, expected='old-commit', **settings)
+                self.assertNotEqual(result.returncode, 0)
 
     def test_pull_request_workflow_contains_no_publish_secrets(self):
         self.assertNotIn('secrets.AUR_', WORKFLOW.read_text())

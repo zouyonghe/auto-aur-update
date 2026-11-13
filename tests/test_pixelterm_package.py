@@ -1,4 +1,7 @@
 from pathlib import Path
+import os
+import pwd
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -8,6 +11,19 @@ PKGBUILD = Path(__file__).resolve().parents[1] / 'pixelterm-c/PKGBUILD'
 
 
 class PixelTermPackageTests(unittest.TestCase):
+    def test_checked_in_metadata_matches_pkgbuild(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / 'PKGBUILD'
+            shutil.copyfile(PKGBUILD, target)
+            command = ['makepkg', '--printsrcinfo']
+            if os.geteuid() == 0:
+                nobody = pwd.getpwnam('nobody')
+                os.chown(directory, nobody.pw_uid, nobody.pw_gid)
+                os.chown(target, nobody.pw_uid, nobody.pw_gid)
+                command = ['runuser', '--user', 'nobody', '--', *command]
+            generated = subprocess.check_output(command, cwd=directory, text=True)
+        self.assertEqual((PKGBUILD.parent / '.SRCINFO').read_text(), generated)
+
     def run_check(self, binary):
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / 'PixelTerm-C-test/bin'

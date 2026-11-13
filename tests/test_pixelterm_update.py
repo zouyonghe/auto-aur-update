@@ -95,10 +95,13 @@ echo 0
 set -eu
 test -z "${GH_TOKEN:-}${GITHUB_TOKEN:-}"
 if [[ $1 != --printsrcinfo ]]; then
+  echo build-stdout
+  echo build-stderr >&2
   printf '%s\\n' "$*" >> "$TEST_PACKAGE_DIR/build-calls"
   touch "$TEST_PACKAGE_DIR/built"
   exit "$BUILD_STATUS"
 fi
+echo prepare-metadata-stderr >&2
 pkgver=$(/usr/bin/sed -n 's/^[[:space:]]*pkgver=//p' PKGBUILD)
 pkgrel=$(/usr/bin/sed -n 's/^[[:space:]]*pkgrel=//p' PKGBUILD)
 printf 'pkgver = %s\\npkgrel = %s\\n' "$pkgver" "$pkgrel"
@@ -167,8 +170,12 @@ exec /usr/bin/sed "$@"
             )
             # Mirror the workflow: source builds consume a separate job's copy.
             if run_source_build and result.returncode == 0 and (package_dir / 'build-required').read_text().strip() == 'true':
-                result = subprocess.run(['bash', str(build_script), str(package_dir)],
-                                        cwd=package_dir, env=environment, text=True, capture_output=True)
+                preparation = result
+                build = subprocess.run(['bash', str(build_script), str(package_dir)],
+                                       cwd=package_dir, env=environment, text=True, capture_output=True)
+                result = subprocess.CompletedProcess(build.args, build.returncode,
+                                                     preparation.stdout + build.stdout,
+                                                     preparation.stderr + build.stderr)
             if expect_success:
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             else:
@@ -192,6 +199,13 @@ exec /usr/bin/sed "$@"
         self.assertEqual(len(self.last_builds.splitlines()), 1)
         self.assertNotIn('Authorization:', self.last_api_request)
         self.assertNotIn('test-workflow-token', self.last_output)
+
+    def test_build_path_retains_preparation_stdout_and_stderr(self):
+        self.run_update('8', published_deps='')
+        self.assertIn('Reconciling ', self.last_output)
+        self.assertIn('prepare-metadata-stderr', self.last_output)
+        self.assertIn('build-stdout', self.last_output)
+        self.assertIn('build-stderr', self.last_output)
 
     def test_preparation_only_emits_build_decision_without_source_execution(self):
         self.run_update('8', published_deps='', run_source_build=False)
