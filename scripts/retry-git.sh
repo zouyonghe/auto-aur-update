@@ -1,6 +1,27 @@
 #!/bin/bash
 
 set -euo pipefail
+if [[ ${1:-} == clone ]]; then
+    # Internal caller supports flags without separate option arguments only.
+    positional=()
+    for argument in "${@:2}"; do
+        case "$argument" in
+            --quiet|--depth=*)
+                if (( ${#positional[@]} > 0 )) ||
+                   { [[ "$argument" != --quiet ]] && [[ ! "$argument" =~ ^--depth=[0-9]+$ ]]; }; then
+                    echo 'Clone options must precede repository and explicit destination' >&2
+                    exit 2
+                fi ;;
+            -*) echo 'Usage: retry-git.sh clone [--quiet] [--depth=N] repository explicit destination' >&2; exit 2 ;;
+            *) positional+=("$argument") ;;
+        esac
+    done
+    if (( ${#positional[@]} != 2 )); then
+        echo 'Usage: retry-git.sh clone [--quiet] [--depth=N] repository explicit destination' >&2
+        exit 2
+    fi
+fi
+(( $# > 0 )) || { echo 'Git subcommand required' >&2; exit 2; }
 workspace=$(mktemp -d)
 trap 'rm -rf "$workspace"' EXIT
 arguments=("$@")

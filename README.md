@@ -108,9 +108,13 @@ build dependencies are installed before makepkg; source compilation itself is
 never automatically retried. Persistent failures still fail closed. A terminated
 pacman transaction may require inspection of its lock/state; no lock is removed
 automatically to force a retry.
-Updater AUR clones and HTTPS tag lookups also have three attempts, a 60-second
-deadline per attempt, and 5/10-second backoff. Partial clones and failed-request
-stdout are discarded before retrying.
+Updater Git HTTPS operations (AUR clone and the fallback `git ls-remote` tag
+lookup) have three attempts, a 60-second deadline per attempt, and 5/10-second
+backoff. This does not apply to curl API/redirect requests: updater curl uses
+the 180-second policy above, while the workflow's public release redirect has
+a 60-second total deadline. Partial clones and failed Git stdout are discarded
+before retrying. The internal Git helper requires an explicit clone destination;
+it supports the caller's `--quiet`/`--depth=N` flags, not every git clone option.
 
 - Changed dependencies automatically increment AUR's final numeric `pkgrel`
   component (`8` → `9`, `1.9` → `1.10`). Both AUR and template revisions accept

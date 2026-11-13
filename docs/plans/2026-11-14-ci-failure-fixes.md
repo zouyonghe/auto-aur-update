@@ -214,3 +214,16 @@ commands referenced by the generic CI/PR skills.
   entrypoint probes accept a valid tag without tokens and reject shell-injection
   package names before setup. ShellCheck passes updated helper scripts; the
   entrypoint retains only its pre-existing unused pkgdir warning.
+
+## Git retry contract follow-up
+
+- Transient Git failure tests require exactly 5/10-second backoff; termination
+  statuses 130/137/143 require one invocation, no sleep, and no partial result.
+- The internal clone wrapper explicitly requires repository plus destination,
+  supports only the caller's leading --quiet/--depth=N options, and rejects
+  missing/ambiguous arguments before invoking Git. It does not promise the full
+  git clone CLI or silently reinterpret repository-only clone syntax.
+- README distinguishes Git's 60-second attempt limit from updater curl's
+  180-second transfer policy and the workflow redirect's 60-second total limit.
+- 130 host/container tests passed; retry-git ShellCheck and whitespace checks
+  passed. No merge or AUR publication was performed.
