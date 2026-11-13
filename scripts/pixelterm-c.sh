@@ -15,7 +15,7 @@ cd "$(dirname "$0")/../pixelterm-c"
 # Treat AUR metadata and the dependency comment as data; never source its PKGBUILD.
 aur_dir=$(mktemp -d)
 trap 'rm -rf "$aur_dir"' EXIT
-if git clone --quiet --depth=1 https://aur.archlinux.org/pixelterm-c.git "$aur_dir/package"; then
+if bash "$script_dir/retry-git.sh" clone --quiet --depth=1 https://aur.archlinux.org/pixelterm-c.git "$aur_dir/package"; then
     aur_srcinfo="$aur_dir/package/.SRCINFO"
 else
     echo "Failed to read current package metadata from AUR" >&2
@@ -80,7 +80,7 @@ if [ -z "$latest_ver" ]; then
         | sed 's/^v//' || true)
 fi
 if [ -z "$latest_ver" ]; then
-    latest_ver=$(git ls-remote --tags https://github.com/zouyonghe/PixelTerm-C.git \
+    latest_ver=$(bash "$script_dir/retry-git.sh" ls-remote --tags https://github.com/zouyonghe/PixelTerm-C.git \
         | awk -F/ '{print $3}' \
         | grep -E '^v?[0-9]+(\.[0-9]+)*$' \
         | sed 's/^v//' \
@@ -104,7 +104,7 @@ if (( version_order > 0 )); then
     # New upstream version starts a fresh package release.
     sed -i "s/^[[:space:]]*pkgrel=.*/pkgrel=1/" PKGBUILD
 else
-    if [[ "$published_record" != "$dependency_record" ]]; then
+    if [[ "$published_record" != "$dependency_record" || "$latest_ver" != "$current_ver" ]]; then
         next_rel=$((10#${current_rel##*.} + 1))
         if [[ "$current_rel" == *.* ]]; then
             next_rel="${current_rel%.*}.${next_rel}"
@@ -114,7 +114,7 @@ else
             exit 1
         fi
         current_rel=$next_rel
-        echo "Dependency versions changed; requesting pkgrel=$current_rel"
+        echo "Dependency versions or upstream version spelling changed; requesting pkgrel=$current_rel"
     fi
     if (( $(vercmp "$template_ver" "$current_ver") == 0 )) &&
        (( $(vercmp "$template_rel" "$current_rel") > 0 )); then
@@ -158,7 +158,15 @@ makepkg --printsrcinfo > .SRCINFO
 comparison_status=0
 cmp -s PKGBUILD "$aur_dir/package/PKGBUILD" || comparison_status=$?
 case "$comparison_status" in
-    0) echo false > build-required; echo "Package and dependency versions unchanged; skipping build" ;;
+    0)
+        metadata_status=0
+        cmp -s .SRCINFO "$aur_srcinfo" || metadata_status=$?
+        case "$metadata_status" in
+            0) echo "Package and dependency versions unchanged; skipping build" ;;
+            1) echo "Repairing generated AUR metadata without a source rebuild" ;;
+            *) echo "Failed to compare .SRCINFO" >&2; exit 1 ;;
+        esac
+        echo false > build-required ;;
     1) echo true > build-required ;;
     *) echo "Failed to compare PKGBUILD; check diffutils and file access." >&2; exit 1 ;;
 esac

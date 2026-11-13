@@ -33,6 +33,9 @@ class WorkflowIsolationTests(unittest.TestCase):
         self.assertEqual(len(uploaded), 1)
         self.assertEqual(prepare['outputs']['artifact_id'], '${{ steps.snapshot.outputs.artifact-id }}')
         self.assertEqual(uploaded[0]['id'], 'snapshot')
+        self.assertIn('pixelterm-c/source-sha', uploaded[0]['with']['path'])
+        publisher = next(step for step in publish['steps'] if step.get('uses') == './.github/actions/deploy-aur')
+        self.assertEqual(publisher['with']['expected_source_revision_file'], 'pixelterm-c/source-sha')
         for job in (build, publish):
             downloads = [step for step in job['steps'] if step.get('uses', '').startswith('actions/download-artifact@')]
             self.assertEqual([step['with']['artifact-ids'] for step in downloads],

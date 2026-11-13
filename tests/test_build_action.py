@@ -9,12 +9,12 @@ ENTRYPOINT = ROOT / 'build-aur-action/entrypoint.sh'
 
 
 class BuildActionMigrationTests(unittest.TestCase):
-    def run_entrypoint(self, *extra_args):
+    def run_entrypoint(self, *extra_args, pkgname='pixelterm-c'):
         # Exercise input validation without running privileged container setup.
         validation = ENTRYPOINT.read_text().split('\nuseradd builder -m\n', 1)[0]
         return subprocess.run(
             ['bash', '-c', validation + '\nexit 91\n',
-             'entrypoint.sh', 'pixelterm-c', 'pixelterm-c', *extra_args],
+             'entrypoint.sh', 'pixelterm-c', pkgname, *extra_args],
             text=True, capture_output=True,
         )
 
@@ -27,6 +27,8 @@ class BuildActionMigrationTests(unittest.TestCase):
             script.chmod(0o755)
             bin_dir = root / 'bin'
             bin_dir.mkdir()
+            (root / 'scripts').mkdir()
+            (root / 'scripts/retry-pacman.sh').write_text((ROOT / 'scripts/retry-pacman.sh').read_text())
             calls = root / 'calls'
             calls.mkdir()
             for command in ('useradd', 'chown', 'chmod', 'pacman-key', 'pacman'):
@@ -37,12 +39,17 @@ class BuildActionMigrationTests(unittest.TestCase):
                     + ('exit "$PACMAN_STATUS"\n' if command == 'pacman' else '')
                 )
                 shim.chmod(0o755)
-            su = bin_dir / 'su'
+            for name, content in {'sudo': 'test "$1" = timeout || exit 99; exec "$@"',
+                                  'sleep': 'exit 0'}.items():
+                tool = bin_dir / name
+                tool.write_text('#!/bin/sh\n' + content + '\n')
+                tool.chmod(0o755)
+            su = bin_dir / 'runuser'
             su.write_text(
                 '#!/bin/sh\n'
                 'test -z "${GH_TOKEN:-}${GITHUB_TOKEN:-}" || exit 77\n'
                 'printf "tag:%s\\n" "${PIXELTERM_RELEASE_TAG:-}"\n'
-                'printf "su:%s\\n" "$*" >> "$CALLS"\n'
+                'printf "runuser:%s\\n" "$*" >> "$CALLS"\n'
             )
             su.chmod(0o755)
             result = subprocess.run(
@@ -84,13 +91,21 @@ class BuildActionMigrationTests(unittest.TestCase):
         self.assertEqual(calls.splitlines(), ['useradd:builder -m', 'chown:-R builder:builder .',
                                               'chmod:-R a+rw .', 'pacman-key:--init',
                                               'pacman:-Syu --noconfirm',
-                                              'su:--whitelist-environment=PIXELTERM_RELEASE_TAG - builder -c cd /github/workspace && bash scripts/pixelterm-c.sh'])
+                                              'runuser:--user builder -- bash /github/workspace/scripts/pixelterm-c.sh'])
         self.assertIn('builder ALL=(ALL) NOPASSWD: ALL\n', sudoers)
 
     def test_failed_system_upgrade_stops_preparation(self):
         result, calls, _ = self.run_full_entrypoint('false', pacman_status='1')
         self.assertNotEqual(result.returncode, 0)
-        self.assertNotIn('su:', calls)
+        self.assertNotIn('runuser:', calls)
+        self.assertEqual(calls.splitlines().count('pacman:-Syu --noconfirm'), 3)
+
+    def test_package_name_injection_is_rejected_before_setup(self):
+        for name in ('pixelterm-c; id', '$(id)', '../pixelterm-c', 'pixelterm-c\nid', '-bad'):
+            with self.subTest(name=name):
+                result = self.run_entrypoint('false', pkgname=name)
+                self.assertNotEqual(result.returncode, 91)
+                self.assertIn('Invalid package name', result.stderr)
 
     def test_release_tag_survives_entrypoint_without_forwarding_tokens(self):
         result, _, _ = self.run_full_entrypoint('false', release_tag='v1.9.0')

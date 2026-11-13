@@ -188,3 +188,29 @@ commands referenced by the generic CI/PR skills.
   the temporary config override. Mutation probes changing either the artifact
   path or build directory argument fail the workflow test. ShellCheck, workflow
   YAML/Bash syntax, and whitespace checks passed. No AUR publish or merge.
+
+## Entrypoint, source freshness, and metadata repair
+
+- Reject invalid pkgname before privileged setup; runuser invokes bash with an
+  absolute script path as a distinct argv value, without shell interpolation.
+  Initial entrypoint upgrades now use the bounded pacman helper. Tests require
+  sudo to invoke timeout, rather than allowing a deadline-free retry to pass.
+- HTTPS clone/tag queries use bounded retry-git.sh. Partial clone directories and
+  failed-command stdout never become trusted results; retries use clean temporary
+  directories, limited attempts, and backoff. Actual source builds remain separate.
+- Preparation carries github.sha in the pinned artifact. Deployment validates it
+  against checkout/current main before importing credentials, then observes main
+  again before final push or no-op success. Even a Task-only main commit requires
+  rerunning preparation. A final read-to-push race cannot be eliminated atomically.
+- If vercmp returns equality but upstream version text changes, pkgrel increases.
+  The review example 1.8.6.0 is actually newer on pacman; a real equivalent spelling
+  such as 01.8.6 exercises the regression instead.
+- Preparation compares generated .SRCINFO as well as identical PKGBUILD. A sole
+  regular-file metadata change is allowed at equal version only if regeneration
+  from staged PKGBUILD produces exactly the staged bytes; package/asset changes
+  and invalid metadata still require a higher version.
+- 127 host/container tests pass. Local-Git tests verify main advancing blocks old
+  prepared SHA; metadata tests verify real staging/commits; actual container
+  entrypoint probes accept a valid tag without tokens and reject shell-injection
+  package names before setup. ShellCheck passes updated helper scripts; the
+  entrypoint retains only its pre-existing unused pkgdir warning.

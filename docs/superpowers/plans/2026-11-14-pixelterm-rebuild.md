@@ -71,6 +71,7 @@ Do not dispatch publishing workflows or merge.
   cp scripts/pixelterm-c.sh "$sandbox/scripts/"
   cp scripts/build-pixelterm.sh "$sandbox/scripts/"
   cp scripts/retry-pacman.sh "$sandbox/scripts/"
+  cp scripts/retry-git.sh "$sandbox/scripts/"
   cp pixelterm-c/PKGBUILD "$sandbox/pixelterm-c/"
   bash "$sandbox/scripts/pixelterm-c.sh"
   bash "$sandbox/scripts/build-pixelterm.sh" "$sandbox/pixelterm-c"

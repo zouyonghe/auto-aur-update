@@ -9,6 +9,7 @@ on:
       - 'scripts/pixelterm-c.sh'
       - 'scripts/build-pixelterm.sh'
       - 'scripts/retry-pacman.sh'
+      - 'scripts/retry-git.sh'
       - 'tests/**'
       - 'build-aur-action/**'
       - '.github/workflows/astrbot-desktop-bin.yml'

@@ -592,6 +592,10 @@ if [[ "$first" == "$1" ]]; then echo -1; else echo 1; fi
             git('init', '--initial-branch=master')
             (root / 'PKGBUILD').write_text('pkgver=4.29.1\npkgrel=1\n')
             metadata = 'pkgbase = test-package\n\tpkgver = 4.29.1\n\tpkgrel = 1\n'
+            generator = bin_dir / 'makepkg'
+            generator.write_text('#!/bin/sh\nprintf "%s" "$GENERATED_METADATA"\n')
+            generator.chmod(0o755)
+            env['GENERATED_METADATA'] = metadata + '\tpkgdesc = regenerated\n'
             (root / '.SRCINFO').write_text(metadata)
             asset = root / 'package-helper.data'
             asset.write_text('original asset')
@@ -609,7 +613,11 @@ if [[ "$first" == "$1" ]]; then echo -1; else echo 1; fi
                 block = 'if [ -n \"$post_process\" ]; then' + block
                 block = block.replace('/tmp/local-repo/', directory + '/')
                 subprocess.run(['bash', '-c', block], cwd=directory, check=True,
-                               env={**env, 'post_process': 'echo changed >> PKGBUILD'}, capture_output=True)
+                                env={**env, 'post_process': 'echo changed >> PKGBUILD'}, capture_output=True)
+            elif change == 'metadata':
+                (root / '.SRCINFO').write_text(metadata + '\tpkgdesc = regenerated\n')
+            elif change == 'invalid_metadata':
+                (root / '.SRCINFO').write_text(metadata + '\tpkgdesc = injected\n')
             if bump:
                 (root / '.SRCINFO').write_text(metadata.replace('pkgrel = 1', 'pkgrel = 2'))
                 (root / 'PKGBUILD').write_text('pkgver=4.29.1\npkgrel=2\n')
@@ -621,12 +629,17 @@ if [[ "$first" == "$1" ]]; then echo -1; else echo 1; fi
             return result, original == git('rev-parse', 'HEAD').strip()
 
     def test_final_changes_require_version_bump(self):
-        for change in ('asset', 'deleted_asset', 'post_process'):
+        for change in ('asset', 'deleted_asset', 'post_process', 'invalid_metadata'):
             with self.subTest(change=change):
                 result, unchanged = self.run_final_package(change=change)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertTrue(unchanged)
                 self.assertIn('strictly higher', result.stderr)
+
+    def test_regenerated_metadata_only_repair_does_not_require_version_bump(self):
+        result, unchanged = self.run_final_package(change='metadata')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(unchanged)
 
     def test_final_asset_change_with_bump_is_committed(self):
         result, unchanged = self.run_final_package(change='asset', bump=True)

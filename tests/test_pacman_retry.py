@@ -13,7 +13,7 @@ class PacmanRetryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             for name, content in {
-                'sudo': 'exec "$@"',
+                'sudo': 'test "$1" = timeout || exit 99; exec "$@"',
                 'timeout': 'test "$1 $2 $3" = "--signal=TERM --kill-after=10s 180s" || exit 99; shift 3; exec "$@"',
                 'sleep': 'echo "sleep:$1" >> "$LOG"',
                 'pacman': '''n=0; test ! -f "$COUNT" || n=$(cat "$COUNT")

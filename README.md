@@ -108,6 +108,9 @@ build dependencies are installed before makepkg; source compilation itself is
 never automatically retried. Persistent failures still fail closed. A terminated
 pacman transaction may require inspection of its lock/state; no lock is removed
 automatically to force a retry.
+Updater AUR clones and HTTPS tag lookups also have three attempts, a 60-second
+deadline per attempt, and 5/10-second backoff. Partial clones and failed-request
+stdout are discarded before retrying.
 
 - Changed dependencies automatically increment AUR's final numeric `pkgrel`
   component (`8` → `9`, `1.9` → `1.10`). Both AUR and template revisions accept
@@ -123,6 +126,11 @@ automatically to force a retry.
   downloads the original preparation artifact by its immutable numeric ID,
   never a build-produced file or a replacement artifact with the same name.
   Deployment rejects an AUR commit changed since preparation.
+  The preparation artifact also records its source SHA. Publication requires
+  that SHA to match the checkout and current `main`, checks it before loading
+  publishing credentials, and checks again immediately before push/no-op success.
+  Even unrelated new main commits require a fresh run; a small final read-to-push
+  race remains because GitHub and AUR cannot be locked atomically.
   A publish-only retry succeeds without pushing if the remote tree contains
   exactly the prepared PKGBUILD and its regenerated `.SRCINFO`, byte-for-byte.
   Assets, post-processing, checksum rewrites, requested `test: true` checks,
@@ -132,6 +140,13 @@ automatically to force a retry.
   the retry; another writer can still update AUR after that final observation.
 - Old template marker-like comments are removed before writing exactly one
   canonical installed-dependency record; malformed published records still fail.
+- Equivalent upstream version spellings that change `pkgver` text still increase
+  `pkgrel` (for example `1.8.6` to `01.8.6`), so changed sources/URLs can publish.
+- If PKGBUILD is unchanged but AUR `.SRCINFO` is stale, preparation identifies
+  a metadata-only repair without rebuilding. Deployment permits it without a
+  version bump only when `.SRCINFO` is the sole changed regular file and its bytes
+  exactly match metadata regenerated from the staged PKGBUILD. Other changes
+  continue to require a higher package version or revision.
 - The published PKGBUILD is the durable baseline, updated only after successful
   publication. No GitHub cache or manual revision commit is needed for dependency
   changes. Existing explicit revision requests remain supported.

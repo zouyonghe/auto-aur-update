@@ -26,7 +26,7 @@ class PixelTermUpdateTests(unittest.TestCase):
                    query_status='0', build_status='0', identical=False, token='',
                    release_tag='', published_marker=None, cmp_status=None,
                    template_marker='', reconcile_status='0', after_build_deps=None,
-                   after_build_query_status='0', run_source_build=True):
+                   after_build_query_status='0', run_source_build=True, published_metadata_extra=''):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             bin_dir = root / 'bin'
@@ -45,6 +45,7 @@ class PixelTermUpdateTests(unittest.TestCase):
             build_script = scripts_dir / 'build-pixelterm.sh'
             build_script.write_text((ROOT / 'scripts/build-pixelterm.sh').read_text())
             (scripts_dir / 'retry-pacman.sh').write_text((ROOT / 'scripts/retry-pacman.sh').read_text())
+            (scripts_dir / 'retry-git.sh').write_text((ROOT / 'scripts/retry-git.sh').read_text())
 
             commands = {
                 'git': '''#!/bin/bash
@@ -54,6 +55,7 @@ if [[ $1 == -C ]]; then printf '%040d\\n' 1; exit; fi
 destination=${@: -1}
 mkdir -p "$destination"
 printf 'pkgver = %s\\npkgrel = %s\\n' "$CURRENT_VERSION" "$CURRENT_RELEASE" > "$destination/.SRCINFO"
+printf '%s' "$PUBLISHED_METADATA_EXTRA" >> "$destination/.SRCINFO"
 printf "pkgver=%s\\npkgrel=%s\\nsha256sums=('%s')\\n" "$CURRENT_VERSION" "$CURRENT_RELEASE" "$SOURCE_CHECKSUM" > "$destination/PKGBUILD"
 if [[ -n $PUBLISHED_MARKER ]]; then
   printf '%s\\n' "$PUBLISHED_MARKER" >> "$destination/PKGBUILD"
@@ -168,6 +170,7 @@ exec /usr/bin/sed "$@"
                 'AFTER_BUILD_DEPS': dependencies if after_build_deps is None else after_build_deps,
                 'AFTER_BUILD_QUERY_STATUS': after_build_query_status,
                 'TEST_PACKAGE_DIR': str(package_dir),
+                'PUBLISHED_METADATA_EXTRA': published_metadata_extra,
             }
             result = subprocess.run(
                 ['bash', str(scripts_dir / SCRIPT.name)],
@@ -262,6 +265,12 @@ exec /usr/bin/sed "$@"
         self.assertEqual(self.field(package, 'pkgrel'), '8')
         self.assertEqual(self.last_builds, '')
 
+    def test_metadata_only_difference_is_identified_without_rebuilding(self):
+        self.run_update('8', identical=True, published_metadata_extra='stale description\n')
+        self.assertEqual(self.last_build_required, 'false')
+        self.assertEqual(self.last_builds, '')
+        self.assertIn('Repairing generated AUR metadata', self.last_output)
+
     def test_comparison_errors_stop_instead_of_rebuilding(self):
         for status in (2, 127):
             with self.subTest(status=status):
@@ -347,6 +356,11 @@ exec /usr/bin/sed "$@"
         for value in ('1..1', '1.', '.1', '1.1;id', '1.2.9'):
             with self.subTest(value=value):
                 self.run_update(value, expect_success=False)
+
+    def test_equivalent_version_text_change_bumps_revision(self):
+        package, _ = self.run_update('8', latest_version='01.8.2')
+        self.assertEqual(self.field(package, 'pkgver'), '01.8.2')
+        self.assertEqual(self.field(package, 'pkgrel'), '9')
 
     def test_same_version_update_publishes_explicit_higher_template_pkgrel(self):
         package, metadata = self.run_update('2', template_rel='8')

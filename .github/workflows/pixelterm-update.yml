@@ -61,10 +61,13 @@ jobs:
 
       - name: Record build decision
         id: prepared
+        env:
+          SOURCE_SHA: ${{ github.sha }}
         run: |
           required="$(cat pixelterm-c/build-required)"
           [[ "$required" == true || "$required" == false ]] || exit 1
           printf 'build_required=%s\n' "$required" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "$SOURCE_SHA" > pixelterm-c/source-sha
 
       - name: Protect prepared deployment snapshot
         id: snapshot
@@ -74,6 +77,7 @@ jobs:
           path: |
             pixelterm-c/PKGBUILD
             pixelterm-c/.aur-revision
+            pixelterm-c/source-sha
           include-hidden-files: true
           if-no-files-found: error
 
@@ -131,6 +135,7 @@ jobs:
           pkgname: pixelterm-c
           pkgbuild: pixelterm-c/PKGBUILD
           expected_revision_file: pixelterm-c/.aur-revision
+          expected_source_revision_file: pixelterm-c/source-sha
           commit_username: ${{ secrets.AUR_USERNAME }}
           commit_email: ${{ secrets.AUR_EMAIL }}
           ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}

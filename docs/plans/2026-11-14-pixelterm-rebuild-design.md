@@ -22,7 +22,9 @@ artifact before any source build. Changed packaging is built from a disposable
 copy on a separate credential-free runner, with startup checks. That job uploads
 no artifacts. Publishing runs on a fresh runner and downloads the original
 preparation artifact; it never consumes build-modified files. Deployment must still
-match the AUR commit observed during preparation. Preserve existing triggers,
+match the AUR commit observed during preparation, check the prepared source SHA
+against current main before credentials and again before publication, and preserve
+the existing triggers,
 credentials, and main-only publishing. AUR consumers rebuild on their next update;
 this does not remotely replace installed binaries or detect ARM-only changes.
 
