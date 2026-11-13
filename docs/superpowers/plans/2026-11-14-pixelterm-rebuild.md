@@ -62,19 +62,24 @@ Do not dispatch publishing workflows or merge.
   libmupdf installed, as a non-root user:
 
   ```sh
+  set -eu
   sandbox="$(mktemp -d)"
   mkdir -p "$sandbox/scripts" "$sandbox/pixelterm-c"
   cp scripts/pixelterm-c.sh "$sandbox/scripts/"
   cp pixelterm-c/PKGBUILD "$sandbox/pixelterm-c/"
   bash "$sandbox/scripts/pixelterm-c.sh"
-  "$sandbox/pixelterm-c/pkg/pixelterm-c/usr/bin/pixelterm" --version
-  readelf -d "$sandbox/pixelterm-c/pkg/pixelterm-c/usr/bin/pixelterm"
+  binary="$sandbox/pixelterm-c/pkg/pixelterm-c/usr/bin/pixelterm"
+  if [ ! -x "$binary" ]; then
+    (cd "$sandbox/pixelterm-c" && makepkg --cleanbuild --syncdeps --check --force)
+  fi
+  "$binary" --version
+  readelf -d "$binary"
   ```
 
   This reads live upstream/AUR state, so generated versions and SONAMEs will
   change. If packaging is already identical to AUR, the updater skips building;
-  run `makepkg --cleanbuild --syncdeps --check --force` in the sandbox's
-  `pixelterm-c` directory to force the verification build in that case.
+  the executable check then forces a verification build before inspecting it.
+  Any updater or forced-build failure stops the commands before inspection.
 - Bash syntax and git whitespace checks passed. ShellCheck passed the updater;
   the container entrypoint retains pre-existing SC2034 (`pkgdir` unused).
 - No system package installation, publishing-workflow dispatch, AUR publication,
