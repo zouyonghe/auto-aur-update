@@ -19,9 +19,9 @@ Node 20 deprecation warnings are non-blocking and out of this focused fix.
    tests. Distinguish real content differences from comparison tool failures.
 2. Install diffutils explicitly in the deployment image and verify cmp while
    building it. Add a credential-free PR job building/testing the actual image.
-3. Authenticate PixelTerm release API requests with the workflow token, preserve
-   that variable across the builder login, and retain unauthenticated local use
-   and existing fallback paths. Never print the token.
+3. Authenticate PixelTerm release API requests in an isolated workflow step.
+   Pass only the validated public tag across the builder login; clear any
+   inherited tokens before updater/build execution. Retain public local queries.
 4. Run full unittest/shell checks and rootless container smoke tests. Review the
    complete diff, commit the automatic-rebuild and CI fixes, and open a PR.
    Do not merge or publish AUR packages.
@@ -35,8 +35,10 @@ commands referenced by the generic CI/PR skills.
   Rootless Podman needed host networking because this machine's proxy listens
   on loopback; this is a local verification setting, not a CI change.
 - Fixed image built successfully; equal/different-file smoke checks passed.
-  All 87 unit tests passed both on the host and inside the actual deploy image.
-- Verified the real builder login preserves a dummy GH_TOKEN without logging it.
+  The initial PR's 87 unit tests passed on the host and inside the deploy image.
+- Initial builder-token forwarding was removed during review: only the public
+  release tag now crosses the login boundary. PR checkouts disable persisted
+  credentials, and container tests receive a copy without Git metadata.
 - Reviewed version precedence, migration/idempotence, invalid input rejection,
   build failure propagation, AUR commit guards, credential scope, and PR-only
   image validation. Existing same-revision content-change guards remain intact.
@@ -44,3 +46,19 @@ commands referenced by the generic CI/PR skills.
   deploy-asset globbing warnings remain outside this change. Workflow YAML and
   embedded Bash syntax were checked; Node action version migration is deferred.
 - No AUR publish, merge, ARM execution, or system package replacement performed.
+
+## Review follow-up verification
+
+- 95 tests pass on the host and inside the credential-free workspace mounted by
+  the exact updated PR container validation block.
+- The workflow workspace-copy test plants dummy credentials in `.git/config`
+  and a nested `.git` worktree file, then verifies neither reaches the copy.
+- Release-query tests validate public tag output and reject malformed/multiline
+  tags. Entrypoint and makepkg probes reject inherited GH_TOKEN/GITHUB_TOKEN.
+- Mutation probes remove --help, --cleanbuild, --check, or token clearing from
+  temporary copies; the corresponding regression tests fail for every mutation.
+- A real makepkg probe with BUILDENV=!check skips a deliberately failing check
+  without --check, but invokes it and exits 4 with --check. No package is installed.
+- Comparison errors (2/127) and noncanonical/duplicate dependency markers stop
+  the updater. Reproduction commands and historical test-count stages are
+  documented in the implementation plan instead of machine-local log paths.

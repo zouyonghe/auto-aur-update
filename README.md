@@ -78,6 +78,8 @@ credentials. The image explicitly installs `diffutils` for `cmp`: a fuller local
 test environment previously hid
 this missing dependency. Comparator failures now report a tool/access error,
 not a false packaging-change error; genuine changes still require higher pkgrel.
+Test checkouts do not persist credentials; container tests mount an isolated
+read-only copy excluding `.git` directories and worktree credential pointers.
 
 ## PixelTerm-C dependency rebuilds
 
@@ -85,8 +87,10 @@ Every scheduled/manual update refreshes the Arch system and queries the current
 `libmupdf` and `ffmpeg` package versions, including epochs and package revisions.
 It compares them with a `# rebuild-deps:` comment in the published AUR PKGBUILD;
 no upstream or dependency version is hardcoded in the detector.
-Release API requests use the workflow's read-only GitHub token to reduce
-unauthenticated API limits; local runs can omit `GH_TOKEN` and retain fallbacks.
+An isolated workflow step queries the release API using its read-only GitHub
+token and passes only the validated public release tag to the updater. Neither
+the updater nor upstream build tools receive the token. Local runs query public
+endpoints without authentication and retain fallbacks.
 
 - Changed dependencies automatically request AUR's current `pkgrel + 1`.
   A higher explicit template revision wins; new upstream releases start at `1`.
@@ -115,8 +119,8 @@ of reusing a cached package:
 ```sh
 git clone https://aur.archlinux.org/pixelterm-c.git
 cd pixelterm-c
-makepkg --cleanbuild --syncdeps --install
-pixelterm -V
+makepkg --cleanbuild --syncdeps --check --install
+pixelterm --version
 ```
 
 Rebuild again when MuPDF or FFmpeg changes its required SONAME. Never symlink

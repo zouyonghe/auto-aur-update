@@ -2,6 +2,9 @@
 
 set -o errexit -o nounset -o pipefail
 
+# Release authentication belongs to a separate workflow step, never build tools.
+unset GH_TOKEN GITHUB_TOKEN
+
 cd "$(dirname "$0")/../pixelterm-c"
 
 # Treat AUR metadata and the dependency comment as data; never source its PKGBUILD.
@@ -42,21 +45,26 @@ if [[ ! "$dependency_record" =~ $dependency_pattern ]]; then
     exit 1
 fi
 published_record=$(sed -n 's/^# rebuild-deps: //p' "$aur_dir/package/PKGBUILD")
-record_count=$(grep -c '^# rebuild-deps:' "$aur_dir/package/PKGBUILD" || true)
+record_count=$(grep -cE '^[[:space:]]*#+[[:space:]]*rebuild-deps' "$aur_dir/package/PKGBUILD" || true)
 if (( record_count > 1 )) ||
    { (( record_count == 1 )) && [[ ! "$published_record" =~ $dependency_pattern ]]; }; then
     echo "Invalid published dependency record" >&2
     exit 1
 fi
 
-# 获取 GitHub 最新版本号
-api_headers=()
-if [[ -n "${GH_TOKEN:-}" ]]; then
-    api_headers=(-H "Authorization: Bearer ${GH_TOKEN}")
+# CI passes only public release metadata from its authenticated request.
+latest_ver=''
+if [[ -n "${PIXELTERM_RELEASE_TAG:-}" ]]; then
+    if [[ ! "$PIXELTERM_RELEASE_TAG" =~ ^v[0-9]+(\.[0-9]+)*$ ]]; then
+        echo "Invalid pre-resolved release tag" >&2
+        exit 1
+    fi
+    latest_ver=${PIXELTERM_RELEASE_TAG#v}
+else
+    latest_ver=$(curl --fail --silent --show-error --location https://api.github.com/repos/zouyonghe/PixelTerm-C/releases/latest \
+        | jq -r '.tag_name // empty' 2>/dev/null \
+        | sed 's/^v//' || true)
 fi
-latest_ver=$(curl --fail --silent --show-error --location "${api_headers[@]}" https://api.github.com/repos/zouyonghe/PixelTerm-C/releases/latest \
-    | jq -r '.tag_name // empty' 2>/dev/null \
-    | sed 's/^v//' || true)
 if [ -z "$latest_ver" ]; then
     latest_ver=$(curl --fail --silent --show-error --location -o /dev/null -w '%{url_effective}' \
         https://github.com/zouyonghe/PixelTerm-C/releases/latest \
@@ -131,10 +139,12 @@ if grep -q "^sha256sums=('')" PKGBUILD; then
 fi
 
 makepkg --printsrcinfo > .SRCINFO
-if cmp -s PKGBUILD "$aur_dir/package/PKGBUILD"; then
-    echo "Package and dependency versions unchanged; skipping build"
-else
-    makepkg --cleanbuild --syncdeps --noconfirm --force
-fi
+comparison_status=0
+cmp -s PKGBUILD "$aur_dir/package/PKGBUILD" || comparison_status=$?
+case "$comparison_status" in
+    0) echo "Package and dependency versions unchanged; skipping build" ;;
+    1) makepkg --cleanbuild --syncdeps --check --noconfirm --force ;;
+    *) echo "Failed to compare PKGBUILD; check diffutils and file access." >&2; exit 1 ;;
+esac
 
 cd -

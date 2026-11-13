@@ -23,7 +23,8 @@ class PixelTermUpdateTests(unittest.TestCase):
                    template_version='1.8.2', template_rel='1', template_indent='',
                    latest_version='1.8.2', expect_success=True,
                    published_deps=DEPENDENCIES, dependencies=DEPENDENCIES,
-                   query_status='0', build_status='0', identical=False, token=''):
+                   query_status='0', build_status='0', identical=False, token='',
+                   release_tag='', published_marker=None, cmp_status=None):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             bin_dir = root / 'bin'
@@ -48,7 +49,9 @@ destination=${@: -1}
 mkdir -p "$destination"
 printf 'pkgver = %s\\npkgrel = %s\\n' "$CURRENT_VERSION" "$CURRENT_RELEASE" > "$destination/.SRCINFO"
 printf "pkgver=%s\\npkgrel=%s\\nsha256sums=('%s')\\n" "$CURRENT_VERSION" "$CURRENT_RELEASE" "$SOURCE_CHECKSUM" > "$destination/PKGBUILD"
-if [[ -n $PUBLISHED_DEPS ]]; then
+if [[ -n $PUBLISHED_MARKER ]]; then
+  printf '%s\\n' "$PUBLISHED_MARKER" >> "$destination/PKGBUILD"
+elif [[ -n $PUBLISHED_DEPS ]]; then
   printf '# rebuild-deps: %s\\n' "$PUBLISHED_DEPS" >> "$destination/PKGBUILD"
 fi
 ''',
@@ -85,6 +88,7 @@ echo 0
 ''',
                 'makepkg': '''#!/bin/bash
 set -eu
+test -z "${GH_TOKEN:-}${GITHUB_TOKEN:-}"
 if [[ $1 != --printsrcinfo ]]; then
   printf '%s\\n' "$*" >> build-calls
   exit "$BUILD_STATUS"
@@ -111,6 +115,8 @@ fi
 exec /usr/bin/sed "$@"
 ''',
             }
+            if cmp_status is not None:
+                commands['cmp'] = f'#!/bin/sh\nexit {cmp_status}\n'
             for name, content in commands.items():
                 executable = bin_dir / name
                 executable.write_text(content)
@@ -128,6 +134,9 @@ exec /usr/bin/sed "$@"
                 'BUILD_STATUS': build_status,
                 'SOURCE_CHECKSUM': checksum,
                 'GH_TOKEN': token,
+                'GITHUB_TOKEN': token,
+                'PIXELTERM_RELEASE_TAG': release_tag,
+                'PUBLISHED_MARKER': published_marker or '',
             }
             result = subprocess.run(
                 ['bash', str(scripts_dir / SCRIPT.name)],
@@ -147,14 +156,23 @@ exec /usr/bin/sed "$@"
                                 if (package_dir / 'build-calls').exists() else '')
             self.last_revision = ((package_dir / '.aur-revision').read_text()
                                   if (package_dir / '.aur-revision').exists() else '')
-            self.last_api_request = (package_dir / 'api-request').read_text()
+            self.last_api_request = ((package_dir / 'api-request').read_text()
+                                     if (package_dir / 'api-request').exists() else '')
             self.last_output = result.stdout + result.stderr
             return package, metadata
 
-    def test_release_api_uses_token_without_logging_it(self):
+    def test_inherited_tokens_do_not_reach_makepkg(self):
         self.run_update('8', token='test-workflow-token')
-        self.assertIn('Authorization: Bearer test-workflow-token', self.last_api_request)
+        self.assertNotIn('Authorization:', self.last_api_request)
         self.assertNotIn('test-workflow-token', self.last_output)
+
+    def test_pre_resolved_release_tag_skips_api_request(self):
+        package, _ = self.run_update('8', release_tag='v1.9.0')
+        self.assertEqual(self.field(package, 'pkgver'), '1.9.0')
+        self.assertEqual(self.last_api_request, '')
+
+    def test_invalid_pre_resolved_release_is_rejected(self):
+        self.run_update('8', release_tag='$(id)', expect_success=False)
 
     def test_local_update_without_token_omits_authentication(self):
         self.run_update('8')
@@ -167,7 +185,9 @@ exec /usr/bin/sed "$@"
                 package, _ = self.run_update('8', published_deps=previous)
                 self.assertEqual(self.field(package, 'pkgrel'), '9')
                 self.assertIn('# rebuild-deps: ' + DEPENDENCIES, package)
-                self.assertIn('--syncdeps', self.last_builds)
+                self.assertIn('--syncdeps', self.last_builds.split())
+                self.assertIn('--cleanbuild', self.last_builds.split())
+                self.assertIn('--check', self.last_builds.split())
                 self.assertEqual(self.last_revision, '0' * 39 + '1\n')
 
     def test_legacy_package_gets_one_baseline_rebuild(self):
@@ -187,6 +207,12 @@ exec /usr/bin/sed "$@"
         self.assertEqual(self.field(package, 'pkgrel'), '8')
         self.assertEqual(self.last_builds, '')
 
+    def test_comparison_errors_stop_instead_of_rebuilding(self):
+        for status in (2, 127):
+            with self.subTest(status=status):
+                result, _, _ = self.run_update('8', cmp_status=status, expect_success=False)
+                self.assertIn('Failed to compare PKGBUILD', result.stderr)
+
     def test_dependency_queries_fail_closed(self):
         for values in ({'query_status': '1'}, {'dependencies': ''},
                        {'dependencies': 'libmupdf=bad;command ffmpeg=1'},
@@ -205,6 +231,19 @@ exec /usr/bin/sed "$@"
 
     def test_failed_build_blocks_publication(self):
         self.run_update('8', published_deps='', build_status='1', expect_success=False)
+
+    def test_noncanonical_markers_fail_closed(self):
+        for marker in ('  # rebuild-deps: ' + DEPENDENCIES,
+                       '\t# rebuild-deps: ' + DEPENDENCIES,
+                       '#rebuild-deps: ' + DEPENDENCIES,
+                       '## rebuild-deps: ' + DEPENDENCIES,
+                       '# rebuild-deps = ' + DEPENDENCIES,
+                       '# rebuild-deps ' + DEPENDENCIES,
+                       '# rebuild-deps: ' + DEPENDENCIES + ' ',
+                       '# rebuild-deps: ' + DEPENDENCIES + '\n  # rebuild-deps: bad'):
+            with self.subTest(marker=marker):
+                result, _, _ = self.run_update('8', published_marker=marker, expect_success=False)
+                self.assertIn('dependency', result.stderr)
 
     def test_regular_same_version_update_preserves_pkgrel(self):
         package, metadata = self.run_update('8')

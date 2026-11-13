@@ -7,7 +7,9 @@ rebuild even when their ABI remains compatible.
 
 Record a data-only `# rebuild-deps:` comment in the published PKGBUILD. Never
 source the remote PKGBUILD. Missing records trigger one migration rebuild;
-malformed records and failed dependency queries stop publication. A new upstream
+malformed records and failed dependency queries stop publication. Marker-like
+comments are detected even with indentation or malformed delimiters; only one
+exact canonical record is accepted. A new upstream
 version starts at pkgrel=1. Otherwise use the higher of AUR pkgrel+1 (when the
 record changes) and the matching committed template revision. Identical records
 preserve pkgrel, and identical generated packaging skips compilation.

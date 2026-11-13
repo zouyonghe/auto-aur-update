@@ -40,6 +40,7 @@ class BuildActionMigrationTests(unittest.TestCase):
             su = bin_dir / 'su'
             su.write_text(
                 '#!/bin/sh\n'
+                'test -z "${GH_TOKEN:-}${GITHUB_TOKEN:-}" || exit 77\n'
                 'printf "su:%s\\n" "$*" >> "$CALLS"\n'
             )
             su.chmod(0o755)
@@ -47,7 +48,8 @@ class BuildActionMigrationTests(unittest.TestCase):
                 ['bash', str(script), 'pixelterm-c', 'pixelterm-c', *extra_args],
                 cwd=root,
                 env={**__import__('os').environ, 'PATH': f'{bin_dir}:{__import__("os").environ["PATH"]}',
-                     'CALLS': str(calls / 'commands'), 'PACMAN_STATUS': pacman_status},
+                     'CALLS': str(calls / 'commands'), 'PACMAN_STATUS': pacman_status,
+                     'GH_TOKEN': 'must-not-reach-updater', 'GITHUB_TOKEN': 'must-not-reach-updater'},
                 text=True, capture_output=True,
             )
             return (result,
@@ -80,7 +82,7 @@ class BuildActionMigrationTests(unittest.TestCase):
         self.assertEqual(calls.splitlines(), ['useradd:builder -m', 'chown:-R builder:builder .',
                                               'chmod:-R a+rw .', 'pacman-key:--init',
                                               'pacman:-Syu --noconfirm',
-                                              'su:--whitelist-environment=GH_TOKEN - builder -c cd /github/workspace && bash scripts/pixelterm-c.sh'])
+                                              'su:--whitelist-environment=PIXELTERM_RELEASE_TAG - builder -c cd /github/workspace && bash scripts/pixelterm-c.sh'])
         self.assertIn('builder ALL=(ALL) NOPASSWD: ALL\n', sudoers)
 
     def test_failed_system_upgrade_stops_preparation(self):

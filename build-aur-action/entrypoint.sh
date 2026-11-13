@@ -2,6 +2,8 @@
 
 set -o errexit -o nounset -o pipefail
 
+unset GH_TOKEN GITHUB_TOKEN
+
 pkgdir=$1
 pkgname=$2
 rebuild_current=${3:-false}
@@ -27,6 +29,6 @@ pacman-key --init
 pacman -Syu --noconfirm
 
 # 切换到 builder 用户执行脚本
-su --whitelist-environment=GH_TOKEN - builder -c "cd /github/workspace && bash scripts/${pkgname}.sh"
+su --whitelist-environment=PIXELTERM_RELEASE_TAG - builder -c "cd /github/workspace && bash scripts/${pkgname}.sh"
 
 #echo OK

@@ -15,16 +15,25 @@ class PixelTermPackageTests(unittest.TestCase):
             executable = source / 'pixelterm'
             executable.write_text('#!/bin/bash\n' + binary)
             executable.chmod(0o755)
-            return subprocess.run(
+            result = subprocess.run(
                 ['bash', '-ec', 'source "$1"; srcdir=$2; pkgver=test; check',
                  'check-package', str(PKGBUILD), directory],
                 text=True, capture_output=True,
             )
+            arguments = source / 'arguments'
+            self.last_arguments = arguments.read_text().splitlines() if arguments.exists() else []
+            return result
 
     def test_runnable_binary_passes(self):
         result = self.run_check(
+            'printf "%s\\n" "$@" >> "$(dirname "$0")/arguments"\n'
             'case "$1" in --version) echo test;; --help) exit 0;; *) exit 2;; esac\n')
         self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.last_arguments, ['--version', '--help'])
+
+    def test_failed_help_rejects_package(self):
+        result = self.run_check('case "$1" in --version) echo test;; --help) exit 1;; esac\n')
+        self.assertNotEqual(result.returncode, 0)
 
     def test_missing_shared_library_rejects_package(self):
         result = self.run_check(

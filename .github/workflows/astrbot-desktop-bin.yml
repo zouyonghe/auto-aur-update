@@ -29,10 +29,18 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Prepare isolated test workspace
+        run: |
+          test_workspace="$(mktemp -d "$RUNNER_TEMP/aur-tests.XXXXXX")"
+          tar --exclude='.git' -cf - . | tar -xf - -C "$test_workspace"
+          printf 'TEST_WORKSPACE=%s\n' "$test_workspace" >> "$GITHUB_ENV"
       - name: Build and smoke-test deployment tools without credentials
         run: |
           docker build -t aur-deploy-test .github/actions/deploy-aur
-          docker run --rm --entrypoint /bin/bash -v "$PWD:/repo:ro" -w /repo aur-deploy-test -euc '
+          docker run --rm --entrypoint /bin/bash -v "$TEST_WORKSPACE:/repo:ro" -w /repo aur-deploy-test -euc '
+            test ! -e /repo/.git
             printf same > /tmp/left
             printf same > /tmp/right
             cmp -s /tmp/left /tmp/right

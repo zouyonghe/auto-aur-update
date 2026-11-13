@@ -15,7 +15,8 @@ to the existing guarded deployment action.
 
 ## Global Constraints
 
-- No hardcoded upstream/dependency version; no new dependencies or remote sourcing.
+- No hardcoded upstream/dependency version or sourcing remote shell code.
+  Required image tooling such as diffutils may be installed explicitly.
 - Failed queries or builds must prevent deployment; preserve main-only scheduling.
 - New upstream versions start at pkgrel=1; unchanged inputs do not repeatedly bump.
 
@@ -48,13 +49,33 @@ Do not dispatch publishing workflows or merge.
 
 ## Verification evidence
 
-- 83 unittest cases passed. Inverting the dependency-change condition in a
+- The initial rebuild-only slice passed 83 unittest cases; the initial PR's
+  combined CI fixes passed 87. Re-run the full suite for the current count:
+  `python3 -m unittest discover -s tests -v`.
+  Inverting the dependency-change condition in a
   temporary copy failed both MuPDF and FFmpeg regression cases as expected.
 - Running the actual updater in an isolated directory queried live dependencies,
   migrated current AUR 1.8.6-1 to 1.8.6-2, and built a package successfully.
-  Packaged `pixelterm -V` returned `1.8.6`; readelf showed `libmupdf.so.28.6`.
-  Evidence: `/tmp/opencode/pixelterm-auto-rebuild-mmcynk3y/build.log`.
+  Packaged version output was `1.8.6`; readelf showed `libmupdf.so.28.6`.
+  Reproduce without installing system packages on fully upgraded x86_64 Arch,
+  with base-devel, git, curl, jq, pkgconf, chafa, glib2, gdk-pixbuf2, ffmpeg, and
+  libmupdf installed, as a non-root user:
+
+  ```sh
+  sandbox="$(mktemp -d)"
+  mkdir -p "$sandbox/scripts" "$sandbox/pixelterm-c"
+  cp scripts/pixelterm-c.sh "$sandbox/scripts/"
+  cp pixelterm-c/PKGBUILD "$sandbox/pixelterm-c/"
+  bash "$sandbox/scripts/pixelterm-c.sh"
+  "$sandbox/pixelterm-c/pkg/pixelterm-c/usr/bin/pixelterm" --version
+  readelf -d "$sandbox/pixelterm-c/pkg/pixelterm-c/usr/bin/pixelterm"
+  ```
+
+  This reads live upstream/AUR state, so generated versions and SONAMEs will
+  change. If packaging is already identical to AUR, the updater skips building;
+  run `makepkg --cleanbuild --syncdeps --check --force` in the sandbox's
+  `pixelterm-c` directory to force the verification build in that case.
 - Bash syntax and git whitespace checks passed. ShellCheck passed the updater;
   the container entrypoint retains pre-existing SC2034 (`pkgdir` unused).
-- No system package installation, GitHub workflow execution, AUR publication,
+- No system package installation, publishing-workflow dispatch, AUR publication,
   or native ARM validation was performed.

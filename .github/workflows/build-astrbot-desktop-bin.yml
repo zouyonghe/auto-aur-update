@@ -28,6 +28,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ inputs.source_sha }}
+          persist-credentials: false
       - name: Test updater
         run: python3 -m unittest discover -s tests -v
       - name: Update stable release metadata
