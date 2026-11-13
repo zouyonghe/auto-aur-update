@@ -85,7 +85,14 @@ jobs:
     container: archlinux:base-devel
     steps:
       - name: Install isolated build tools
-        run: pacman -Syu --noconfirm --needed git diffutils
+        run: |
+          for attempt in 1 2 3; do
+            status=0
+            timeout --signal=TERM --kill-after=10s 180s pacman -Syu --noconfirm --needed git diffutils || status=$?
+            if [ "$status" -eq 0 ]; then break; fi
+            if [ "$attempt" -eq 3 ] || [ "$status" -eq 130 ] || [ "$status" -eq 137 ] || [ "$status" -eq 143 ]; then exit "$status"; fi
+            sleep "$((attempt * 5))"
+          done
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false

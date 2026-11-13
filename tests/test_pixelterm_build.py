@@ -26,6 +26,10 @@ class PixelTermBuildIsolationTests(unittest.TestCase):
                 'makepkg': '''#!/bin/sh
 set -eu
 test -z "${GH_TOKEN:-}${GITHUB_TOKEN:-}"
+test "$1" = --config
+test -f "$2"
+grep -q -- '--connect-timeout 10 --max-time 180 --retry 2 --retry-delay 5 --retry-max-time 240' "$2"
+shift 2
 test "$*" = '--cleanbuild --syncdeps --check --noconfirm --force'
 test ! -e .aur-revision
 printf 'attacker-package' > PKGBUILD

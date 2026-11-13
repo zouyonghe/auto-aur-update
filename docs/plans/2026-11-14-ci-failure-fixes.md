@@ -169,3 +169,22 @@ commands referenced by the generic CI/PR skills.
   local-Git concurrent pushes, requested-test retry rejection, dotted revision
   cases, and entrypoint tag checks. ShellCheck, Bash syntax, and whitespace checks
   passed. No AUR publication or merge was performed.
+
+## Bounded network requests and artifact path coverage
+
+- Updater curl requests and makepkg HTTP download agents have explicit connect/
+  transfer deadlines and limited retries. No upstream build command is retried.
+- A small retry-pacman.sh limits each dependency transaction to 180 seconds,
+  three attempts, and 5/10-second backoff; cancellation/forced termination is not
+  retried. Bootstrap installs use the same policy before checkout is available.
+  All required build dependencies are reconciled through the bounded helper
+  before makepkg. Pacman lock files are never blindly deleted on failure.
+- Workflow tests assert that the build artifact download path is prepared and
+  matches the parsed directory argument passed to build-pixelterm.sh.
+- 119 tests pass on the host and in the deployment image. Retry tests cover
+  immediate success, transient/persistent errors, timeout limits, and cancellation.
+  A real local HTTP endpoint returning 503 then 200 verified curl recovery; the
+  actual system makepkg HTTP/HTTPS agents retained the configured limits after
+  the temporary config override. Mutation probes changing either the artifact
+  path or build directory argument fail the workflow test. ShellCheck, workflow
+  YAML/Bash syntax, and whitespace checks passed. No AUR publish or merge.

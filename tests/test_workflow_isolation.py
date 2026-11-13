@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 import re
+import shlex
 import subprocess
 import tempfile
 import textwrap
@@ -37,6 +38,12 @@ class WorkflowIsolationTests(unittest.TestCase):
             self.assertEqual([step['with']['artifact-ids'] for step in downloads],
                              ['${{ needs.update.outputs.artifact_id }}'])
             self.assertTrue(downloads[0]['with']['merge-multiple'])
+            if job is build:
+                self.assertEqual(downloads[0]['with']['path'], 'prepared')
+                commands = [step['run'] for step in build['steps'] if 'run' in step]
+                invocation = next(line for command in commands for line in command.splitlines()
+                                  if 'bash scripts/build-pixelterm.sh' in line)
+                self.assertEqual(shlex.split(invocation)[-1], downloads[0]['with']['path'])
         self.assertFalse(any(step.get('uses', '').startswith('actions/upload-artifact@') for step in build['steps']))
         self.assertNotIn('secrets.', str(build))
         self.assertNotIn('deploy-aur', str(build))

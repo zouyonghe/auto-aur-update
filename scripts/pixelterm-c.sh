@@ -4,6 +4,11 @@ set -o errexit -o nounset -o pipefail
 
 # Release authentication belongs to a separate workflow step, never build tools.
 unset GH_TOKEN GITHUB_TOKEN
+script_dir=$(cd "$(dirname "$0")" && pwd)
+curl() {
+    command curl --connect-timeout 10 --max-time 180 --retry 2 --retry-delay 5 \
+        --retry-max-time 240 "$@"
+}
 
 cd "$(dirname "$0")/../pixelterm-c"
 
@@ -34,7 +39,7 @@ fi
 
 # Reconcile against the entrypoint's refreshed snapshot, then record build inputs.
 # shortcut: x86_64 repository only; add per-arch probes if ARM-only updates matter.
-sudo pacman -Su --needed --noconfirm libmupdf ffmpeg
+bash "$script_dir/retry-pacman.sh" -Su --needed --noconfirm libmupdf ffmpeg
 installed_dependency_record() {
     LC_ALL=C pacman -Q libmupdf ffmpeg | awk '{print $1 "=" $2}' | paste -sd ' ' -
 }

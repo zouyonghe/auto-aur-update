@@ -8,6 +8,7 @@ on:
       - 'scripts/astrbot-desktop-bin.py'
       - 'scripts/pixelterm-c.sh'
       - 'scripts/build-pixelterm.sh'
+      - 'scripts/retry-pacman.sh'
       - 'tests/**'
       - 'build-aur-action/**'
       - '.github/workflows/astrbot-desktop-bin.yml'

@@ -100,6 +100,15 @@ If the authenticated API fails or returns an invalid tag, release resolution
 falls back to the public latest-release redirect and validates its host, project,
 and numeric tag before exporting it. No token is passed to this public request.
 
+Updater and makepkg HTTP downloads use a 10-second connection timeout,
+180-second transfer limit, and at most two retries (5-second delay, 240-second
+retry window). Dependency transactions and initial build-tool installation have
+three attempts capped at 180 seconds each, with 5/10-second backoff. Required
+build dependencies are installed before makepkg; source compilation itself is
+never automatically retried. Persistent failures still fail closed. A terminated
+pacman transaction may require inspection of its lock/state; no lock is removed
+automatically to force a retry.
+
 - Changed dependencies automatically increment AUR's final numeric `pkgrel`
   component (`8` → `9`, `1.9` → `1.10`). Both AUR and template revisions accept
   makepkg's `integer[.integer]` format; `vercmp` verifies forward progress.

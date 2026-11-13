@@ -44,6 +44,7 @@ class PixelTermUpdateTests(unittest.TestCase):
             (scripts_dir / SCRIPT.name).write_text(SCRIPT.read_text())
             build_script = scripts_dir / 'build-pixelterm.sh'
             build_script.write_text((ROOT / 'scripts/build-pixelterm.sh').read_text())
+            (scripts_dir / 'retry-pacman.sh').write_text((ROOT / 'scripts/retry-pacman.sh').read_text())
 
             commands = {
                 'git': '''#!/bin/bash
@@ -62,6 +63,11 @@ fi
 ''',
                 'curl': '''#!/bin/bash
 set -eu
+[[ " $* " == *" --connect-timeout 10 "* ]]
+[[ " $* " == *" --max-time 180 "* ]]
+[[ " $* " == *" --retry 2 "* ]]
+[[ " $* " == *" --retry-delay 5 "* ]]
+[[ " $* " == *" --retry-max-time 240 "* ]]
 if [[ " $* " == *"/releases/latest"* ]]; then
   printf '%s\\n' "$@" > api-request
 fi
@@ -108,7 +114,8 @@ printf 'pkgver = %s\\npkgrel = %s\\n' "$pkgver" "$pkgrel"
 ''',
                 'pacman': '''#!/bin/bash
 set -eu
-if [[ "$*" == '-Su --needed --noconfirm libmupdf ffmpeg' ]]; then
+if [[ "$*" == '-Su --needed --noconfirm libmupdf ffmpeg' ||
+      "$*" == '-Su --needed --noconfirm libmupdf ffmpeg chafa glib2 gdk-pixbuf2 pkgconf' ]]; then
   touch "$TEST_PACKAGE_DIR/reconciled"
   exit "$RECONCILE_STATUS"
 fi
@@ -122,6 +129,7 @@ if [[ -e $TEST_PACKAGE_DIR/built ]]; then exit "$AFTER_BUILD_QUERY_STATUS"; fi
 exit "$QUERY_STATUS"
 ''',
                 'sudo': '#!/bin/sh\nexec "$@"\n',
+                'sleep': '#!/bin/sh\nexit 0\n',
                 'sed': '''#!/bin/bash
 set -eu
 if [[ ${1:-} == -i ]]; then
