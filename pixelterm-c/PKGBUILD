@@ -20,7 +20,9 @@ build() {
 
 check() {
   cd "${srcdir}/PixelTerm-C-${pkgver}"
-  test "$(./bin/pixelterm --version)" = "${pkgver}"
+  local actual_version
+  actual_version=$(./bin/pixelterm --version) || return 1
+  test "${actual_version}" = "${pkgver}" || return 1
   ./bin/pixelterm --help >/dev/null
 }
 

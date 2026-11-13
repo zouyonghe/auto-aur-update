@@ -55,20 +55,31 @@ class WorkflowIsolationTests(unittest.TestCase):
         prepare = workflow_step('pixelterm-update.yml', 'Prepare PixelTerm package')
         self.assertNotIn('GH_TOKEN:', prepare)
         self.assertIn('PIXELTERM_RELEASE_TAG:', prepare)
-        for tag, success in (('v1.9.0', True), ('$(id)', False), ('v1.9.0\ntag=bad', False)):
-            with self.subTest(tag=tag), tempfile.TemporaryDirectory() as directory:
+        cases = [('v1.9.0', '0', '', '0', 'v1.9.0'),
+                 ('$(id)', '0', '', '0', None), ('v1.9.0\ntag=bad', '0', '', '0', None),
+                 ('', '1', 'https://github.com/zouyonghe/PixelTerm-C/releases/tag/v1.9.1', '0', 'v1.9.1'),
+                 ('bad', '0', 'https://github.com/zouyonghe/PixelTerm-C/releases/tag/v1.9.2', '0', 'v1.9.2'),
+                 ('', '1', 'https://evil.invalid/releases/tag/v1.9.1', '0', None),
+                 ('', '1', 'https://github.com/zouyonghe/PixelTerm-C/releases/tag/v1.9.1', '22', None)]
+        for tag, api_status, url, curl_status, expected in cases:
+            with self.subTest(tag=tag, url=url, api_status=api_status), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 gh = root / 'gh'
-                gh.write_text('#!/bin/sh\ntest "$GH_TOKEN" = request-only || exit 99\nprintf "%s\\n" "$TEST_TAG"\n')
+                gh.write_text('#!/bin/sh\ntest "$GH_TOKEN" = request-only || exit 99\nprintf "%s\\n" "$TEST_TAG"\nexit "$API_STATUS"\n')
                 gh.chmod(0o755)
+                curl = root / 'curl'
+                curl.write_text('#!/bin/sh\ntest -z "${GH_TOKEN:-}${GITHUB_TOKEN:-}" || exit 99\nprintf "%s" "$FALLBACK_URL"\nexit "$CURL_STATUS"\n')
+                curl.chmod(0o755)
                 output = root / 'output'
                 result = subprocess.run(['bash', '-euo', 'pipefail', '-c', script],
                                         env={**os.environ, 'PATH': f'{root}:{os.environ["PATH"]}',
                                              'GH_TOKEN': 'request-only', 'TEST_TAG': tag,
+                                             'API_STATUS': api_status, 'FALLBACK_URL': url,
+                                             'CURL_STATUS': curl_status,
                                              'GITHUB_OUTPUT': str(output)}, capture_output=True, text=True)
-                if success:
+                if expected:
                     self.assertEqual(result.returncode, 0, result.stderr)
-                    self.assertEqual(output.read_text(), 'tag=v1.9.0\n')
+                    self.assertEqual(output.read_text(), f'tag={expected}\n')
                 else:
                     self.assertNotEqual(result.returncode, 0)
                     self.assertFalse(output.exists())

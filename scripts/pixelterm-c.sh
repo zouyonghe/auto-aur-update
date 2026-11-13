@@ -32,13 +32,16 @@ if [[ ! "$template_ver" =~ ^[0-9]+(\.[0-9]+)*$ || ! "$template_rel" =~ ^[0-9]+$ 
     exit 1
 fi
 
-# Query the refreshed Arch database, preserving epochs and package revisions.
+# Reconcile against the entrypoint's refreshed snapshot, then record build inputs.
 # shortcut: x86_64 repository only; add per-arch probes if ARM-only updates matter.
-if ! dependency_packages=$(LC_ALL=C pacman -Sp --print-format '%n=%v' --nodeps libmupdf ffmpeg); then
+sudo pacman -Su --needed --noconfirm libmupdf ffmpeg
+installed_dependency_record() {
+    LC_ALL=C pacman -Q libmupdf ffmpeg | awk '{print $1 "=" $2}' | paste -sd ' ' -
+}
+if ! dependency_record=$(installed_dependency_record); then
     echo "Failed to query dependency versions" >&2
     exit 1
 fi
-dependency_record=$(printf '%s\n' "$dependency_packages" | paste -sd ' ' -)
 dependency_pattern='^libmupdf=[a-zA-Z0-9.:_+~-]+ ffmpeg=[a-zA-Z0-9.:_+~-]+$'
 if [[ ! "$dependency_record" =~ $dependency_pattern ]]; then
     echo "Invalid dependency versions from Arch" >&2
@@ -125,7 +128,7 @@ fi
 
 # 更新 PKGBUILD 中的校验和
 sed -i "s/^sha256sums=.*/sha256sums=('${sha256_src}')/" PKGBUILD
-sed -i '/^# rebuild-deps:/d' PKGBUILD
+sed -i -E '/^[[:space:]]*#+[[:space:]]*rebuild-deps/d' PKGBUILD
 printf '# rebuild-deps: %s\n' "$dependency_record" >> PKGBUILD
 
 # 验证 sha256sums 是否已正确更新
@@ -146,5 +149,10 @@ case "$comparison_status" in
     1) makepkg --cleanbuild --syncdeps --check --noconfirm --force ;;
     *) echo "Failed to compare PKGBUILD; check diffutils and file access." >&2; exit 1 ;;
 esac
+if ! built_dependency_record=$(installed_dependency_record) ||
+   [[ "$built_dependency_record" != "$dependency_record" ]]; then
+    echo "Dependency versions changed during build; refusing stale marker" >&2
+    exit 1
+fi
 
 cd -

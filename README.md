@@ -83,14 +83,19 @@ read-only copy excluding `.git` directories and worktree credential pointers.
 
 ## PixelTerm-C dependency rebuilds
 
-Every scheduled/manual update refreshes the Arch system and queries the current
-`libmupdf` and `ffmpeg` package versions, including epochs and package revisions.
+Every scheduled/manual update refreshes the Arch system, reconciles `libmupdf`
+and `ffmpeg` against that database snapshot, then reads their installed versions,
+including epochs and package revisions. The installed versions are checked again
+after building; drift or query failure prevents publication.
 It compares them with a `# rebuild-deps:` comment in the published AUR PKGBUILD;
 no upstream or dependency version is hardcoded in the detector.
 An isolated workflow step queries the release API using its read-only GitHub
 token and passes only the validated public release tag to the updater. Neither
 the updater nor upstream build tools receive the token. Local runs query public
 endpoints without authentication and retain fallbacks.
+If the authenticated API fails or returns an invalid tag, release resolution
+falls back to the public latest-release redirect and validates its host, project,
+and numeric tag before exporting it. No token is passed to this public request.
 
 - Changed dependencies automatically request AUR's current `pkgrel + 1`.
   A higher explicit template revision wins; new upstream releases start at `1`.
@@ -100,6 +105,8 @@ endpoints without authentication and retain fallbacks.
 - Failed queries, malformed records, or failed builds stop publication. Changed
   packaging is clean-built with dependencies and checked using `--version` and
   `--help`. Deployment rejects an AUR commit changed since preparation.
+- Old template marker-like comments are removed before writing exactly one
+  canonical installed-dependency record; malformed published records still fail.
 - The published PKGBUILD is the durable baseline, updated only after successful
   publication. No GitHub cache or manual revision commit is needed for dependency
   changes. Existing explicit revision requests remain supported.

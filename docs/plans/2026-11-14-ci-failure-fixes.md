@@ -62,3 +62,24 @@ commands referenced by the generic CI/PR skills.
 - Comparison errors (2/127) and noncanonical/duplicate dependency markers stop
   the updater. Reproduction commands and historical test-count stages are
   documented in the implementation plan instead of machine-local log paths.
+
+## Build-input and release-fallback follow-up
+
+- Reconcile tracked dependencies against the entrypoint's database snapshot,
+  record installed versions with pacman -Q, then recheck them after building.
+  Failed reconciliation/query or version drift prevents publication. A remote
+  repository change alone does not refresh pacman's local sync database; the
+  underlying correctness issue is using desired rather than installed versions,
+  including dependencies absent from a fresh preparation container.
+- Remove all template marker-like comments before appending one canonical record.
+  Published malformed baselines still fail closed rather than being normalized.
+- Capture the version probe separately and reject a nonzero exit even when stdout
+  equals pkgver. Explicit comparison failure also returns before the help probe.
+- The preparation image explicitly installs diffutils and checks cmp; PR validation
+  now builds and smoke-tests that image as well as the deploy image.
+- Failed/invalid authenticated API responses fall back to the public latest-release
+  redirect, with credentials cleared, timeout bounds, and exact host/project/tag
+  validation. Invalid URLs and failed fallback requests produce no release output.
+- 101 tests pass on the host and isolated deploy-image workspace. Preparation-image
+  build and real cmp checks passed. Temporary mutation probes catch reverting the
+  installed query, template cleanup, and version-probe exit-status guard.

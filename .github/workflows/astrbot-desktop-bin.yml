@@ -39,6 +39,8 @@ jobs:
       - name: Build and smoke-test deployment tools without credentials
         run: |
           docker build -t aur-deploy-test .github/actions/deploy-aur
+          docker build -t aur-prepare-test build-aur-action
+          docker run --rm --entrypoint /bin/bash aur-prepare-test -euc 'command -v cmp'
           docker run --rm --entrypoint /bin/bash -v "$TEST_WORKSPACE:/repo:ro" -w /repo aur-deploy-test -euc '
             test ! -e /repo/.git
             printf same > /tmp/left

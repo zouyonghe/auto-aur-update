@@ -24,7 +24,9 @@ class PixelTermUpdateTests(unittest.TestCase):
                    latest_version='1.8.2', expect_success=True,
                    published_deps=DEPENDENCIES, dependencies=DEPENDENCIES,
                    query_status='0', build_status='0', identical=False, token='',
-                   release_tag='', published_marker=None, cmp_status=None):
+                   release_tag='', published_marker=None, cmp_status=None,
+                   template_marker='', reconcile_status='0', after_build_deps=None,
+                   after_build_query_status='0'):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             bin_dir = root / 'bin'
@@ -37,6 +39,7 @@ class PixelTermUpdateTests(unittest.TestCase):
             (package_dir / 'PKGBUILD').write_text(
                 f'pkgver={template_version}\n{template_indent}pkgrel={template_rel}\n'
                 f"sha256sums=('{checksum if identical else 'old'}')\n"
+                + template_marker
             )
             (scripts_dir / SCRIPT.name).write_text(SCRIPT.read_text())
 
@@ -91,6 +94,7 @@ set -eu
 test -z "${GH_TOKEN:-}${GITHUB_TOKEN:-}"
 if [[ $1 != --printsrcinfo ]]; then
   printf '%s\\n' "$*" >> build-calls
+  touch built
   exit "$BUILD_STATUS"
 fi
 pkgver=$(/usr/bin/sed -n 's/^[[:space:]]*pkgver=//p' PKGBUILD)
@@ -99,10 +103,20 @@ printf 'pkgver = %s\\npkgrel = %s\\n' "$pkgver" "$pkgrel"
 ''',
                 'pacman': '''#!/bin/bash
 set -eu
-[[ "$*" == "-Sp --print-format %n=%v --nodeps libmupdf ffmpeg" ]]
-printf '%s\\n' "$DEPENDENCIES" | tr ' ' '\\n'
+if [[ "$*" == '-Su --needed --noconfirm libmupdf ffmpeg' ]]; then
+  touch reconciled
+  exit "$RECONCILE_STATUS"
+fi
+if [[ $1 == -Sp ]]; then echo libmupdf=99; echo ffmpeg=99; exit; fi
+[[ "$*" == '-Q libmupdf ffmpeg' ]]
+test -e reconciled
+values=$DEPENDENCIES
+if [[ -e built ]]; then values=$AFTER_BUILD_DEPS; fi
+printf '%s\\n' "$values" | tr ' ' '\\n' | tr '=' ' '
+if [[ -e built ]]; then exit "$AFTER_BUILD_QUERY_STATUS"; fi
 exit "$QUERY_STATUS"
 ''',
+                'sudo': '#!/bin/sh\nexec "$@"\n',
                 'sed': '''#!/bin/bash
 set -eu
 if [[ ${1:-} == -i ]]; then
@@ -137,6 +151,9 @@ exec /usr/bin/sed "$@"
                 'GITHUB_TOKEN': token,
                 'PIXELTERM_RELEASE_TAG': release_tag,
                 'PUBLISHED_MARKER': published_marker or '',
+                'RECONCILE_STATUS': reconcile_status,
+                'AFTER_BUILD_DEPS': dependencies if after_build_deps is None else after_build_deps,
+                'AFTER_BUILD_QUERY_STATUS': after_build_query_status,
             }
             result = subprocess.run(
                 ['bash', str(scripts_dir / SCRIPT.name)],
@@ -231,6 +248,30 @@ exec /usr/bin/sed "$@"
 
     def test_failed_build_blocks_publication(self):
         self.run_update('8', published_deps='', build_status='1', expect_success=False)
+
+    def test_marker_uses_installed_versions_not_newer_sync_versions(self):
+        package, _ = self.run_update('8', published_deps='')
+        self.assertIn('# rebuild-deps: ' + DEPENDENCIES, package)
+        self.assertNotIn('=99', package)
+
+    def test_dependency_reconciliation_failure_stops_update(self):
+        self.run_update('8', reconcile_status='1', expect_success=False)
+
+    def test_dependency_change_during_build_stops_update(self):
+        result, _, _ = self.run_update('8', published_deps='', after_build_deps='libmupdf=99 ffmpeg=99',
+                                       expect_success=False)
+        self.assertIn('changed during build', result.stderr)
+
+    def test_post_build_query_failure_rejects_even_matching_output(self):
+        self.run_update('8', published_deps='', after_build_query_status='1', expect_success=False)
+
+    def test_template_markers_are_replaced_with_one_canonical_record(self):
+        for marker in ('  # rebuild-deps: bad\n', '## rebuild-deps = bad\n',
+                       '# rebuild-deps: bad\n\t#rebuild-deps bad\n'):
+            with self.subTest(marker=marker):
+                package, _ = self.run_update('8', template_marker=marker)
+                records = [line for line in package.splitlines() if 'rebuild-deps' in line]
+                self.assertEqual(records, ['# rebuild-deps: ' + DEPENDENCIES])
 
     def test_noncanonical_markers_fail_closed(self):
         for marker in ('  # rebuild-deps: ' + DEPENDENCIES,

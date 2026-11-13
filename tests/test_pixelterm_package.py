@@ -45,6 +45,10 @@ class PixelTermPackageTests(unittest.TestCase):
         result = self.run_check('echo stale\n')
         self.assertNotEqual(result.returncode, 0)
 
+    def test_expected_version_with_failed_exit_is_rejected(self):
+        result = self.run_check('case "$1" in --version) echo test; exit 1;; --help) exit 0;; esac\n')
+        self.assertNotEqual(result.returncode, 0)
+
 
 if __name__ == '__main__':
     unittest.main()

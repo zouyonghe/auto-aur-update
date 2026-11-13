@@ -5,7 +5,7 @@
 
 **Goal:** Automatically publish a higher pkgrel when libmupdf or ffmpeg changes.
 
-**Architecture:** Record queried Arch package versions in a data-only PKGBUILD
+**Architecture:** Reconcile dependencies, then record installed Arch versions in a data-only PKGBUILD
 comment. Compare against AUR, build changed packaging, and pass its AUR snapshot
 to the existing guarded deployment action.
 
@@ -57,9 +57,11 @@ Do not dispatch publishing workflows or merge.
 - Running the actual updater in an isolated directory queried live dependencies,
   migrated current AUR 1.8.6-1 to 1.8.6-2, and built a package successfully.
   Packaged version output was `1.8.6`; readelf showed `libmupdf.so.28.6`.
-  Reproduce without installing system packages on fully upgraded x86_64 Arch,
+  Reproduce without installing PixelTerm into the system on fully upgraded x86_64 Arch,
   with base-devel, git, curl, jq, pkgconf, chafa, glib2, gdk-pixbuf2, ffmpeg, and
-  libmupdf installed, as a non-root user:
+  libmupdf installed, as a non-root user with sudo permission for pacman.
+  Use a disposable build container: the updater installs/upgrades dependencies
+  and performs a full upgrade against its existing sync database snapshot.
 
   ```sh
   set -eu
@@ -82,5 +84,5 @@ Do not dispatch publishing workflows or merge.
   Any updater or forced-build failure stops the commands before inspection.
 - Bash syntax and git whitespace checks passed. ShellCheck passed the updater;
   the container entrypoint retains pre-existing SC2034 (`pkgdir` unused).
-- No system package installation, publishing-workflow dispatch, AUR publication,
+- No PixelTerm system-package installation, publishing-workflow dispatch, AUR publication,
   or native ARM validation was performed.
