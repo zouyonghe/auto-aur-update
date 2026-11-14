@@ -116,7 +116,7 @@ exec "$REAL_GIT" "$@"
 
     def test_checkout_is_pinned_and_keeps_push_credentials(self):
         workflow = WORKFLOW.read_text()
-        self.assertIn('actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683', workflow)
+        self.assertIn('actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09', workflow)
         self.assertNotIn('persist-credentials: false', workflow)
 
     def test_noop_does_not_create_a_commit(self):

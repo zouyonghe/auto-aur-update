@@ -262,7 +262,7 @@ fi
         self.assertEqual(workflow_concurrency(task),
                          'group: auto-aur-update-sync-${{ github.ref }} cancel-in-progress: false')
         self.assertIn('workflow_dispatch:', pixelterm)
-        self.assertIn('actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683', pixelterm)
+        self.assertIn('actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09', pixelterm)
         self.assertNotIn('aur-update-queue', pixelterm)
         self.assertNotIn('PixelTerm-Rebuild-Requests', pixelterm)
         self.assertNotIn('needs:', workflow_job(pixelterm, 'update'))

@@ -24,13 +24,13 @@ jobs:
        (github.event_name == 'watch' &&
         github.event.repository.owner.id == github.event.sender.id) ||
        (github.event_name == 'schedule' && github.event.schedule == '30 2 * * *'))
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     outputs:
       build_required: ${{ steps.prepared.outputs.build_required }}
       artifact_id: ${{ steps.snapshot.outputs.artifact-id }}
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
 
@@ -71,7 +71,7 @@ jobs:
 
       - name: Protect prepared deployment snapshot
         id: snapshot
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: pixelterm-prepared
           path: |
@@ -84,7 +84,7 @@ jobs:
   build:
     needs: update
     if: needs.update.outputs.build_required == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     container: archlinux:base-devel
     steps:
@@ -97,10 +97,10 @@ jobs:
             if [ "$attempt" -eq 3 ] || [ "$status" -eq 130 ] || [ "$status" -eq 137 ] || [ "$status" -eq 143 ]; then exit "$status"; fi
             sleep "$((attempt * 5))"
           done
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           artifact-ids: ${{ needs.update.outputs.artifact_id }}
           merge-multiple: true
@@ -118,13 +118,13 @@ jobs:
       needs.update.result == 'success' &&
       (needs.build.result == 'success' ||
        (needs.build.result == 'skipped' && needs.update.outputs.build_required == 'false'))
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           artifact-ids: ${{ needs.update.outputs.artifact_id }}
           merge-multiple: true
